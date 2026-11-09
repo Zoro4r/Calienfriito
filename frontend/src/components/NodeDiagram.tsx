@@ -10,7 +10,8 @@ import { parseUtc } from './ui'
 // latest telemetry, so a broken part shows up (e.g. the fan ordered on but at 0 RPM).
 
 type Health = 'ok' | 'fault' | 'unknown'
-interface Part { name: string; pin: string; role: string; health: Health; state: string }
+// on: actuators only. A working actuator that is off gets a gray dot; green means on, red a fault.
+interface Part { name: string; pin: string; role: string; health: Health; state: string; on?: boolean }
 
 const STALE_MIN = 15
 const DOT: Record<Health, string> = { ok: 'bg-emerald-400', fault: 'bg-red-400', unknown: 'bg-slate-500' }
@@ -42,17 +43,17 @@ function parts(r: StoredReading | null | undefined) {
   const fan: Part = !ns ? unknown('Ventilador de PC', 'D25 · D33', 'Potencia por PWM, RPM por tacómetro')
     : pct && pct >= 20 && rpm === 0
       ? { name: 'Ventilador de PC', pin: 'D25 · D33', role: 'Potencia por PWM, RPM por tacómetro', health: 'fault', state: `Falla: 0 RPM con orden al ${pct} %` }
-      : { name: 'Ventilador de PC', pin: 'D25 · D33', role: 'Potencia por PWM, RPM por tacómetro', health: 'ok',
+      : { name: 'Ventilador de PC', pin: 'D25 · D33', role: 'Potencia por PWM, RPM por tacómetro', health: 'ok', on: !!pct,
           state: pct ? `Al ${pct} %${rpm != null ? ` · ${rpm} RPM` : ''}` : 'Apagado' }
   const led = (ns?.led ?? '').split(' ')[0].toUpperCase()
   const actuators: Part[] = [
     fan,
     !ns ? unknown('Calefactor PTC', 'D32', 'Encendido por MOSFET')
-      : { name: 'Calefactor PTC', pin: 'D32', role: 'Encendido por MOSFET', health: 'ok', state: ns.calefactor ? 'Encendido' : 'Apagado' },
+      : { name: 'Calefactor PTC', pin: 'D32', role: 'Encendido por MOSFET', health: 'ok', on: !!ns.calefactor, state: ns.calefactor ? 'Encendido' : 'Apagado' },
     !ns ? unknown('Buzzer', 'D26', 'Alarma de CO')
-      : { name: 'Buzzer', pin: 'D26', role: 'Alarma de CO', health: 'ok', state: ns.buzzer ? 'Sonando' : 'Apagado' },
+      : { name: 'Buzzer', pin: 'D26', role: 'Alarma de CO', health: 'ok', on: !!ns.buzzer, state: ns.buzzer ? 'Sonando' : 'Apagado' },
     !ns ? unknown('LED RGB', 'D27 · D14 · D13', 'Estado del control')
-      : { name: 'LED RGB', pin: 'D27 · D14 · D13', role: 'Estado del control', health: 'ok', state: LED_NAME[led] ?? (ns.led ? ns.led.toLowerCase() : 'Apagado') },
+      : { name: 'LED RGB', pin: 'D27 · D14 · D13', role: 'Estado del control', health: 'ok', on: !!ns.led && led !== 'APAGADO' && led !== 'SIN', state: LED_NAME[led] ?? (ns.led ? ns.led.toLowerCase() : 'Apagado') },
   ]
   return { sensors, actuators }
 }
@@ -68,7 +69,7 @@ function PartCard({ p, side }: { p: Part; side: 'left' | 'right' }) {
       </p>
       <p className="mt-0.5 text-xs text-slate-500">{p.role}</p>
       <p className={`mt-1 flex items-center gap-1.5 text-xs ${health === 'fault' ? 'text-red-300' : 'text-slate-300'}`}>
-        <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${DOT[health]}`} />{p.state}
+        <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${health === 'ok' && p.on === false ? DOT.unknown : DOT[health]}`} />{p.state}
       </p>
     </div>
   )
