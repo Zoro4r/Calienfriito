@@ -9,6 +9,7 @@ import { compareRooms, locationLabel, shortName, type Room } from '../utils/room
 import { RoomFilters, useRoomFilter } from '../components/RoomFilters'
 import { fmt, timeAgo, valueText, clockTime, Tabs, Toast, useToast, type Tone } from '../components/ui'
 import RoomInfra from '../components/RoomInfra'
+import RoomDetail, { type Tab as RoomTab } from './RoomDetail'
 import NewRoomDialog from '../components/NewRoomDialog'
 import NodeConnectDialog from '../components/NodeConnectDialog'
 import { useRoomRows, stateOf, targetOf, shortDate, ORDER, type RoomRow, type Status } from '../hooks/useRoomRows'
@@ -23,7 +24,8 @@ type Point = { timestamp: string } & Partial<Record<Metric, number | null>>
 interface SensorRecent { sensor_id: string; room_id: string | null; points: Point[] }
 interface WeekBlock { room_id: string; day: number; start: string; end: string; kind: string; people: number }
 
-type View = 'mediciones' | 'infraestructura'
+type View = 'mediciones' | RoomTab | 'infraestructura'
+const ROOM_TABS: RoomTab[] = ['vivo', 'estrategias', 'control', 'historial', 'config']
 const WINDOW_MIN = 60
 const SERIES_POLL_MS = 30_000
 const DOT: Record<Tone, string> = { alert: 'bg-red-400', warn: 'bg-amber-400', high: 'bg-orange-400', ok: 'bg-emerald-400', info: 'bg-sky-400', muted: 'bg-slate-500' }
@@ -143,7 +145,9 @@ export default function Rooms() {
     : undefined) ?? list[0]
   const room = rooms.find(r => r.id === wanted) ?? fallback
   const select = (id: string) => setParams(p => { p.set('aula', id); p.delete('estado'); return p }, { replace: true })
-  const view: View = isAdmin && params.get('vista') === 'infraestructura' ? 'infraestructura' : 'mediciones'
+  const wantedView = params.get('vista')
+  const view: View = wantedView === 'infraestructura' ? (isAdmin ? 'infraestructura' : 'mediciones')
+    : (ROOM_TABS as string[]).includes(wantedView ?? '') ? wantedView as RoomTab : 'mediciones'
   const setView = (v: View) => setParams(p => { if (v === 'mediciones') p.delete('vista'); else p.set('vista', v); return p }, { replace: true })
 
   // Who drives the room (admins only: the endpoint is admin-only).
@@ -218,9 +222,17 @@ export default function Rooms() {
         </aside>
 
         <section className="surface flex min-h-[24rem] flex-col overflow-hidden">
-          {isAdmin && room && (
-            <div className="shrink-0 px-5 pt-2">
-              <Tabs<View> value={view} onChange={setView} items={[{ value: 'mediciones', label: 'Mediciones' }, { value: 'infraestructura', label: 'Infraestructura' }]} />
+          {room && (
+            <div className="shrink-0 overflow-x-auto px-5 pt-2">
+              <Tabs<View> value={view} onChange={setView} items={[
+                { value: 'mediciones', label: 'Mediciones' },
+                { value: 'vivo', label: 'En vivo' },
+                { value: 'estrategias', label: 'Aprendizaje' },
+                { value: 'control', label: 'Control' },
+                { value: 'historial', label: 'Historial' },
+                { value: 'config', label: 'Configuración' },
+                ...(isAdmin ? [{ value: 'infraestructura' as View, label: 'Infraestructura' }] : []),
+              ]} />
             </div>
           )}
           {!room ? <p className="m-auto text-sm text-slate-500">{rooms.length ? 'Elige un aula.' : 'Todavía no hay aulas. Crea la primera con "Nueva aula".'}</p> : view === 'infraestructura' ? (
@@ -231,6 +243,8 @@ export default function Rooms() {
               onRenamed={id => { reloadRooms(); select(id) }}
               onDeleted={() => { reloadRooms(); setParams(p => { p.delete('aula'); return p }, { replace: true }) }}
             />
+          ) : view !== 'mediciones' ? (
+            <RoomDetail key={room.id} roomId={room.id} embeddedTab={view} />
           ) : <>
             <header className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b border-slate-800 px-5 py-4">
               <div className="min-w-0">

@@ -38,7 +38,7 @@ interface SensorDevice {
   _updating?: boolean
 }
 
-type Tab = 'vivo' | 'estrategias' | 'control' | 'historial' | 'config'
+export type Tab = 'vivo' | 'estrategias' | 'control' | 'historial' | 'config'
 
 interface WeeklySlot { day_of_week: number; start_time: string; end_time: string; expected_people: number }
 interface RoomReservation { id: number; room_id: string; username?: string; start_time: string; end_time: string; expected_occupancy: number }
@@ -82,12 +82,16 @@ function Toggle({ checked, onChange, disabled, label }: {
 }
 
 // ── View ──────────────────────────────────────────────────────────────────────
-export default function RoomDetail() {
-  const { id } = useParams<{ id: string }>()
+// Full page at /room/:id, or embedded in Aulas (roomId + embeddedTab): then Aulas draws the
+// tabs and this view renders only the chosen tab, under a compact room header.
+export default function RoomDetail({ roomId, embeddedTab }: { roomId?: string; embeddedTab?: Tab } = {}) {
+  const params_ = useParams<{ id: string }>()
+  const id = roomId ?? params_.id
+  const embedded = !!embeddedTab
   const { user } = useAuth()
   const isGuest = user?.role === 'guest'
   const [params, setParams] = useSearchParams()
-  const tab = (params.get('tab') as Tab) || 'vivo'
+  const tab = embeddedTab ?? ((params.get('tab') as Tab) || 'vivo')
   const setTab = (t: Tab) => setParams(t === 'vivo' ? {} : { tab: t }, { replace: true })
 
   const [room, setRoom] = useState<RoomInfo | null>(null)
@@ -266,15 +270,19 @@ export default function RoomDetail() {
   )
 
   return (
-    <div className={`flex flex-col gap-4 ${tab === 'vivo' || tab === 'historial' || tab === 'estrategias' || tab === 'control' || (tab === 'config' && hasNode) ? 'lg:h-full lg:min-h-0' : ''}`}>
+    <div className={embedded
+      ? 'flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-5'
+      : `flex flex-col gap-4 ${tab === 'vivo' || tab === 'historial' || tab === 'estrategias' || tab === 'control' || (tab === 'config' && hasNode) ? 'lg:h-full lg:min-h-0' : ''}`}>
       {/* ── Context header ── */}
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-        <Link to="/aulas" className="btn btn-ghost px-2" aria-label="Volver a las aulas">
-          <ArrowLeft size={18} />
-        </Link>
-        <h1 className="page-title">
-          {room?.id} <span className="text-sm font-normal text-slate-400">{name}</span>
-        </h1>
+      <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2">
+        {!embedded && (
+          <Link to="/aulas" className="btn btn-ghost px-2" aria-label="Volver a las aulas">
+            <ArrowLeft size={18} />
+          </Link>
+        )}
+        {embedded
+          ? <h2 className="text-xl font-semibold text-white">{room?.id} <span className="text-sm font-normal text-slate-400">{name}</span></h2>
+          : <h1 className="page-title">{room?.id} <span className="text-sm font-normal text-slate-400">{name}</span></h1>}
         <div className="flex flex-wrap items-center gap-2">
           {latest
             ? <Chip tone={live ? 'ok' : 'muted'} dot pulse={live}>{live ? 'En vivo' : `Última lectura ${timeAgo(latest.timestamp, now)}`}</Chip>
@@ -302,7 +310,7 @@ export default function RoomDetail() {
         </Card>
       )}
 
-      <Tabs<Tab>
+      {!embedded && <Tabs<Tab>
         value={tab}
         onChange={setTab}
         items={[
@@ -311,7 +319,11 @@ export default function RoomDetail() {
           { value: 'historial', label: 'Historial' },
           { value: 'config', label: 'Configuración' },
         ]}
-      />
+      />}
+
+      {embedded && !hasNode && !loading && (tab === 'estrategias' || tab === 'control') && (
+        <Card><p className="py-8 text-center text-sm text-slate-400">Esta aula no tiene nodo: {tab === 'control' ? 'no hay actuadores que controlar' : 'no hay estrategias que comparar'}. Conéctalo desde Infraestructura.</p></Card>
+      )}
 
       {/* ── En vivo: the node monitor (/monitor/), in the dashboard's style ── */}
       {tab === 'vivo' && (!latest && !hasNode ? (
