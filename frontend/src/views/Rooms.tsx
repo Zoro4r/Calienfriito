@@ -188,11 +188,6 @@ export default function Rooms() {
         </div>
         {isAdmin && <button className="btn btn-primary" onClick={() => setCreating(true)}><Plus size={16} /> Nueva aula</button>}
       </div>
-      {isAdmin && (
-        <div className="shrink-0">
-          <Tabs<View> value={view} onChange={setView} items={[{ value: 'mediciones', label: 'Mediciones' }, { value: 'infraestructura', label: 'Infraestructura' }]} />
-        </div>
-      )}
 
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 lg:grid-cols-[17rem_minmax(0,1fr)]">
         <aside className="surface flex min-h-0 flex-col overflow-hidden">
@@ -223,6 +218,11 @@ export default function Rooms() {
         </aside>
 
         <section className="surface flex min-h-[24rem] flex-col overflow-hidden">
+          {isAdmin && room && (
+            <div className="shrink-0 px-5 pt-2">
+              <Tabs<View> value={view} onChange={setView} items={[{ value: 'mediciones', label: 'Mediciones' }, { value: 'infraestructura', label: 'Infraestructura' }]} />
+            </div>
+          )}
           {!room ? <p className="m-auto text-sm text-slate-500">{rooms.length ? 'Elige un aula.' : 'Todavía no hay aulas. Crea la primera con "Nueva aula".'}</p> : view === 'infraestructura' ? (
             <RoomInfra
               key={room.id}
