@@ -15,7 +15,8 @@ export const FW = {
   fan75At: 25.0, fan100At: 25.5, fan100Co2: 1500, levelBand: 0.2,   // fan 50 / 75 / 100 % when cooling
   humHigh: 60, humLow: 40,
   coAlarm: 50,
-  occupiedAdc: 2200,
+  occupiedAdc: 2200,      // Wokwi simulation
+  nodeOccupiedAdc: 300,   // physical node firmware default (hardware/bringup/nodo), before it reports its own
   minOnS: 60,
 }
 
@@ -54,8 +55,12 @@ export const humBand = (h: number): Band =>
       : { text: `Moderado (${FW.humLow}–${FW.humHigh} %)`, tone: 'ok' }
 export const coBand = (co: number): Band =>
   co >= FW.coAlarm ? { text: `Alarma (≥ ${FW.coAlarm} ppm)`, tone: 'alert' } : { text: `Normal (< ${FW.coAlarm} ppm)`, tone: 'ok' }
-export const occBand = (adc: number): Band =>
-  adc >= FW.occupiedAdc ? { text: `Aula ocupada (≥ ${FW.occupiedAdc})`, tone: 'ok' } : { text: `Aula vacía (< ${FW.occupiedAdc})`, tone: 'muted' }
+// Occupancy threshold the node is using: the one it reports (umbral_ocupacion); for firmware that
+// does not report it yet, the default of the physical node (real data) or of the Wokwi simulation.
+export const occupiedAt = (ns: { umbral_ocupacion?: number } | null | undefined, simulated?: boolean) =>
+  ns?.umbral_ocupacion ?? (simulated ? FW.occupiedAdc : FW.nodeOccupiedAdc)
+export const occBand = (adc: number, threshold: number = FW.occupiedAdc): Band =>
+  adc >= threshold ? { text: `Aula ocupada (≥ ${threshold})`, tone: 'ok' } : { text: `Aula vacía (< ${threshold})`, tone: 'muted' }
 
 // Dot colours for wrapped status text (same as StatusText).
 const TONE_DOT_CLASS: Record<Tone, string> = {

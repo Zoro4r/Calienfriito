@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 import { Cpu } from 'lucide-react'
 import type { StoredReading } from '../types'
-import { FW } from './NodeLive'
+import { occupiedAt } from './NodeLive'
 import { parseUtc } from './ui'
 
 // The ESP32 node of a room drawn as its parts: sensors on the left, the board in the
@@ -31,7 +31,7 @@ function parts(r: StoredReading | null | undefined) {
     r!.co2_ppm == null && ns?.co2_proxy == null
       ? { name: 'MQ-135', pin: 'D34', role: 'CO₂ y ocupación', health: 'fault', state: 'Falla: sin lectura' }
       : { name: 'MQ-135', pin: 'D34', role: 'CO₂ y ocupación', health: 'ok',
-          state: `${r!.co2_ppm != null ? `${Math.round(r!.co2_ppm)} ppm` : `ADC ${ns!.co2_proxy}`}${ns?.co2_proxy != null ? (ns.co2_proxy >= FW.occupiedAdc ? ' · ocupada' : ' · vacía') : ''}` },
+          state: `${r!.co2_ppm != null ? `${Math.round(r!.co2_ppm)} ppm` : `ADC ${ns!.co2_proxy}`}${ns?.co2_proxy != null ? (ns.co2_proxy >= occupiedAt(ns, r!.is_simulated) ? ' · ocupada' : ' · vacía') : ''}` },
     r!.co_ppm == null
       ? { name: 'MQ-7', pin: 'D35', role: 'Monóxido de carbono', health: 'fault', state: 'Falla: sin lectura' }
       : { name: 'MQ-7', pin: 'D35', role: 'Monóxido de carbono', health: 'ok', state: `${Math.round(r!.co_ppm)} ppm${ns?.alarma_co ? ' · alarma' : ''}` },

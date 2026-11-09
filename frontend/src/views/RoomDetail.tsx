@@ -10,7 +10,7 @@ import NodeRules from '../components/NodeRules'
 import NodeControl from '../components/NodeControl'
 import {
   ActuatorsCard, ControlStateCard, FW, LiveChart, Panel, SensorCard, stateKey, niceAxis,
-  coBand, humBand, occBand, tempBand, type Point,
+  coBand, humBand, occBand, occupiedAt, tempBand, type Point,
 } from '../components/NodeLive'
 import { useNodes } from '../hooks/useNodes'
 import { levelTemp, levelCO2, levelCO, getStatusLabel } from '../utils/sensorColors'
@@ -237,6 +237,7 @@ export default function RoomDetail({ roomId, embeddedTab }: { roomId?: string; e
 
   const name = room ? (room.name.startsWith(room.id) ? room.name.slice(room.id.length).trim() : room.name) : ''
   const nodeState = latest?.node_state
+  const occupiedThreshold = occupiedAt(nodeState, latest?.is_simulated)
   const lastNodeReading = readings.find(r => r.node_state?.accion) ?? null
   const nodeMessage = id && nodes[id] && !nodes[id].online
     ? `Nodo desconectado: sin decisiones ${lastNodeReading ? `desde ${timeAgo(lastNodeReading.timestamp, now)}` : 'registradas'}.`
@@ -346,7 +347,7 @@ export default function RoomDetail({ roomId, embeddedTab }: { roomId?: string; e
             <SensorCard label="CO (MQ-7)" value={fmt(latest?.co_ppm, 0)} unit="ppm" band={latest ? coBand(latest.co_ppm ?? 0) : null} />
             {hasNode
               ? <SensorCard label="Ocupación (MQ-135)" value={nodeState?.co2_proxy != null ? String(nodeState.co2_proxy) : '—'} unit="ADC"
-                  band={nodeState?.co2_proxy != null ? occBand(nodeState.co2_proxy) : null} />
+                  band={nodeState?.co2_proxy != null ? occBand(nodeState.co2_proxy, occupiedThreshold) : null} />
               : <SensorCard label="Ocupación estimada" value={fmt(action?.actual_occupancy, 0)} unit={`/ ${room?.max_capacity ?? '—'}`}
                   band={latest ? { text: `CO₂ ${fmt(latest.co2_ppm, 0)} ppm`, tone: LEVEL_TONE[levelCO2(latest.co2_ppm ?? 0)] } : null} />}
             {hasNode
@@ -385,7 +386,7 @@ export default function RoomDetail({ roomId, embeddedTab }: { roomId?: string; e
             {hasNode
               ? <LiveChart title="MQ-135 (ADC 0–4095)" data={live_.points} dataKey="adc" unit="ADC"
                   axis={{ domain: [0, 4095], ticks: [0, 2000, 4095] }}
-                  refs={[{ y: FW.occupiedAdc, label: `Ocupada ≥ ${FW.occupiedAdc}`, color: '#94a3b8' }]} />
+                  refs={[{ y: occupiedThreshold, label: `Ocupada ≥ ${occupiedThreshold}`, color: '#94a3b8' }]} />
               : <LiveChart title="CO₂ (ppm)" data={live_.points} dataKey="co2" unit="ppm"
                   axis={niceAxis(live_.points.map(p => p.co2 ?? 0), [400, 1600], 400)}
                   refs={[{ y: 800, label: 'atención', color: '#fbbf24' }]} />}
