@@ -7,8 +7,8 @@ import { Dialog } from './ui'
 
 // Room form: editing lives in Infraestructura (RoomDialog); creating, together with the
 // node, in Aulas (NewRoomDialog). Both share the fields, checks and history warnings below.
-// A new room only asks for its name, which is also its code (the AULA of the ESP32), plus an
-// optional building and floor; capacity and target temperature start with defaults.
+// A new room only asks for its name, which is also its code (the AULA of the ESP32); capacity
+// and target temperature start with defaults, and building and floor can be set later when editing.
 
 interface RoomForm { id: string; name: string; building: string; floor: string; max_capacity: string; target_temp: string }
 const EMPTY_ROOM: RoomForm = { id: '', name: '', building: '', floor: '', max_capacity: '30', target_temp: '24' }
@@ -88,13 +88,9 @@ export function RoomFields({ form, onSubmit }: { form: FormState; onSubmit: () =
     </label>
   )
   if (!original) return (
-    <form className="grid grid-cols-2 gap-3" onSubmit={e => { e.preventDefault(); onSubmit() }}>
-      <div className="col-span-2">
-        {field('name', 'Nombre', { placeholder: 'ej. B201', maxLength: 20, autoFocus: true })}
-        <span className="mt-1 block text-xs text-slate-500">Es también el código del aula: el que pondrás como AULA en el ESP32.</span>
-      </div>
-      {field('building', 'Edificio (opcional)', { placeholder: 'ej. B', maxLength: 10 })}
-      {field('floor', 'Piso (opcional)', { type: 'number', placeholder: 'ej. 2', min: -5, max: 99 })}
+    <form onSubmit={e => { e.preventDefault(); onSubmit() }}>
+      {field('name', 'Nombre', { placeholder: 'ej. B201', maxLength: 20, autoFocus: true })}
+      <span className="mt-1 block text-xs text-slate-500">Es también el código del aula: el que pondrás como AULA en el ESP32.</span>
       <button type="submit" className="hidden" />
     </form>
   )
