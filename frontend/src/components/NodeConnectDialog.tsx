@@ -24,7 +24,7 @@ export default function NodeConnectDialog({ room, onClose }: { room: Room; onClo
 
   return (
     <Dialog
-      size="lg"
+      size="md"
       title={`Conectar nodo · ${room.id}`}
       onClose={onClose}
       footer={<>
