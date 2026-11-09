@@ -211,28 +211,30 @@ export default function NodeControl({ roomId, nodeState, stateAt, online, canCon
             </button>
           ))}
         </div>
-        {pick === 'fan' && (
+        <div className="grid grid-cols-2 gap-3">
+          {pick === 'fan' ? (
+            <div>
+              <p className="mb-1.5 text-xs text-slate-400">Potencia (%)</p>
+              <div className="segmented grid grid-cols-4 p-0.5">
+                {LEVELS.map(l => (
+                  <button key={l} type="button" disabled={locked} onClick={() => setLevel(l)}
+                    className={`segmented-item justify-center px-0 py-1 text-xs disabled:opacity-60 ${level === l ? 'segmented-item-active' : ''}`}>
+                    {l}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : <div />}
           <div>
-            <p className="mb-1.5 text-xs text-slate-400">Potencia del ventilador</p>
+            <p className="mb-1.5 text-xs text-slate-400">Durante</p>
             <div className="segmented grid grid-cols-4 p-0.5">
-              {LEVELS.map(l => (
-                <button key={l} type="button" disabled={locked} onClick={() => setLevel(l)}
-                  className={`segmented-item justify-center py-1 text-xs disabled:opacity-60 ${level === l ? 'segmented-item-active' : ''}`}>
-                  {l} %
+              {DURATIONS.map(d => (
+                <button key={d} type="button" disabled={locked} onClick={() => setMinutes(d)}
+                  className={`segmented-item justify-center px-0 py-1 text-xs disabled:opacity-60 ${minutes === d ? 'segmented-item-active' : ''}`}>
+                  {durationLabel(d)}
                 </button>
               ))}
             </div>
-          </div>
-        )}
-        <div>
-          <p className="mb-1.5 text-xs text-slate-400">Durante</p>
-          <div className="segmented grid grid-cols-4 p-0.5">
-            {DURATIONS.map(d => (
-              <button key={d} type="button" disabled={locked} onClick={() => setMinutes(d)}
-                className={`segmented-item justify-center py-1 text-xs disabled:opacity-60 ${minutes === d ? 'segmented-item-active' : ''}`}>
-                {durationLabel(d)}
-              </button>
-            ))}
           </div>
         </div>
         <button type="button" className="btn btn-primary w-full justify-center" disabled={!canControl || !!sending || locked} onClick={() => send(pick, minutes, level)}>
@@ -242,7 +244,7 @@ export default function NodeControl({ roomId, nodeState, stateAt, online, canCon
           {locked ? 'Hay una orden en curso: detenla o espera a que termine para enviar otra.'
             : msg?.text ?? (!canControl ? 'Tu rol no puede controlar el aula.'
             : online === false ? 'El nodo está desconectado: la orden no llegaría.'
-            : 'Si se detecta CO, la alarma enciende el ventilador y apaga el calefactor.')}
+            : 'La alarma de CO siempre tiene prioridad.')}
         </p>
       </div>
     </section>
