@@ -53,7 +53,7 @@ const HOUR = 3_600_000
 
 function Legend() {
   return (
-    <span className="grid shrink-0 grid-cols-2 gap-x-5 gap-y-1.5 text-xs text-slate-400">
+    <span className="flex flex-wrap gap-x-5 gap-y-1.5 text-xs text-slate-400">
       <span className="flex items-center gap-1.5"><span className="h-0.5 w-3" style={{ background: RULES_COLOR }} />Reglas</span>
       <span className="flex items-center gap-1.5"><span className="h-0.5 w-3" style={{ background: LEARN_COLOR }} />Aprendizaje automático</span>
       <span className="flex items-center gap-1.5"><span className="w-3 border-t border-dashed border-slate-400" />Rango ideal {BAND_LO}–{BAND_HI} °C</span>
@@ -75,9 +75,9 @@ function StrategyStat({ label, summary, note }: { label: string; summary?: Summa
   const pct = summary?.pct_out_of_band
   const hasClasses = !!summary && summary.occupied_hours > 0 && pct != null && !note
   return (
-    <div className="w-[21rem] shrink-0">
+    <div className="min-w-0">
       <p className="text-xs leading-4 text-slate-400">{label}</p>
-      <p className="mt-0.5 flex h-7 items-baseline gap-2 tabular-nums">
+      <p className="mt-0.5 flex flex-wrap items-baseline gap-x-2 tabular-nums">
         <span className="text-xl font-semibold leading-7 text-white">{hasClasses ? `${fmt(pct, 1)} %` : '—'}</span>
         <span className="text-xs text-slate-300">
           {note ?? (hasClasses ? 'del tiempo de clase fuera del rango ideal' : 'sin clases este día')}
@@ -181,8 +181,9 @@ export default function Strategies({ roomId, emptyMessage }: { roomId: string; e
         : data?.source === 'none' ? <p className="text-sm text-slate-400">{emptyMessage}</p>
         : data && (
           <section className="surface flex min-h-0 flex-col rounded-xl px-2 pb-2 pt-3 lg:min-h-[360px] lg:flex-1">
-            <div className="flex shrink-0 flex-wrap items-start justify-between gap-x-8 gap-y-3 px-4 pb-5 lg:h-[84px] lg:flex-nowrap">
-              <div className="flex flex-wrap gap-x-10 gap-y-2">
+            {/* Stats, then the legend: no fixed height, so on a narrow panel they wrap instead of covering the chart. */}
+            <div className="flex shrink-0 flex-col gap-3 px-4 pb-4">
+              <div className="grid grid-cols-1 gap-x-8 gap-y-3 sm:grid-cols-2">
                 <StrategyStat label="Reglas" summary={data.rules?.summary} />
                 <StrategyStat label="Aprendizaje automático" summary={data.learning?.summary}
                   note={sim ? undefined : 'En vivo decide en sombra: no tiene temperatura propia'} />
