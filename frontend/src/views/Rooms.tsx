@@ -11,6 +11,7 @@ import { fmt, timeAgo, valueText, toneText, clockTime, Tabs, Toast, useToast, LE
 import { tempBand, humBand, coBand, type Band } from '../components/NodeLive'
 import { getStatusLabel } from '../utils/sensorColors'
 import RoomInfra from '../components/RoomInfra'
+import RoomWeek from '../components/RoomWeek'
 import RoomDetail, { type Tab as RoomTab } from './RoomDetail'
 import NewRoomDialog from '../components/NewRoomDialog'
 import NodeConnectDialog from '../components/NodeConnectDialog'
@@ -26,7 +27,7 @@ type Point = { timestamp: string } & Partial<Record<Metric, number | null>>
 interface SensorRecent { sensor_id: string; room_id: string | null; points: Point[] }
 interface WeekBlock { room_id: string; day: number; start: string; end: string; kind: string; people: number }
 
-type View = 'mediciones' | RoomTab | 'infraestructura'
+type View = 'mediciones' | 'horarios' | RoomTab | 'infraestructura'
 // En vivo stays only on the full room page (Abrir aula): Mediciones covers it here.
 const ROOM_TABS: RoomTab[] = ['estrategias', 'control', 'historial', 'config']
 const WINDOW_MIN = 60
@@ -157,6 +158,7 @@ export default function Rooms() {
   const select = (id: string) => setParams(p => { p.set('aula', id); p.delete('estado'); return p }, { replace: true })
   const wantedView = params.get('vista')
   const view: View = wantedView === 'infraestructura' ? (isAdmin ? 'infraestructura' : 'mediciones')
+    : wantedView === 'horarios' ? 'horarios'
     : (ROOM_TABS as string[]).includes(wantedView ?? '') ? wantedView as RoomTab : 'mediciones'
   const setView = (v: View) => setParams(p => { if (v === 'mediciones') p.delete('vista'); else p.set('vista', v); return p }, { replace: true })
 
@@ -238,6 +240,7 @@ export default function Rooms() {
             <div className="shrink-0 overflow-x-auto px-5 pt-2">
               <Tabs<View> value={view} onChange={setView} items={[
                 { value: 'mediciones', label: 'Mediciones' },
+                { value: 'horarios', label: 'Horarios' },
                 { value: 'estrategias', label: 'Aprendizaje' },
                 { value: 'control', label: 'Control' },
                 { value: 'historial', label: 'Historial' },
@@ -254,6 +257,8 @@ export default function Rooms() {
               onRenamed={id => { reloadRooms(); select(id) }}
               onDeleted={() => { reloadRooms(); setParams(p => { p.delete('aula'); return p }, { replace: true }) }}
             />
+          ) : view === 'horarios' ? (
+            <RoomWeek room={room} />
           ) : view !== 'mediciones' ? (
             <RoomDetail key={room.id} roomId={room.id} embeddedTab={view} />
           ) : <>
