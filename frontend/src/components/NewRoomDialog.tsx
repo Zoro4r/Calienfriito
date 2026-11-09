@@ -37,7 +37,7 @@ export default function NewRoomDialog({ onClose, onCreated }: { onClose: () => v
 
   return (
     <Dialog
-      size="md"
+      size="wide"
       title={<span className="flex flex-col"><span>{step === 'datos' ? 'Nueva aula' : `Nueva aula · ${roomId}`}</span><span className="text-xs font-normal text-slate-500">{stepLabel}</span></span>}
       onClose={onClose}
       footer={step === 'datos' ? <>

@@ -107,12 +107,12 @@ export function NodeSetup({ roomId }: { roomId: string }) {
   const b = 'font-semibold text-white'
   return (
     <div className="flex flex-col gap-3 text-sm text-slate-300">
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <label className="block"><span className="field-label">Red WiFi (2.4 GHz)</span>
           <input className="field" value={ssid} onChange={e => setSsid(e.target.value)} placeholder="nombre de la red" autoComplete="off" /></label>
         <label className="block"><span className="field-label">Clave del WiFi</span>
           <input className="field" type="password" value={wifiPass} onChange={e => setWifiPass(e.target.value)} placeholder="vacía si es abierta" autoComplete="new-password" /></label>
-        <label className="block sm:col-span-2"><span className="field-label">Clave del broker</span>
+        <label className="block"><span className="field-label">Clave del broker</span>
           <input className="field" type="password" value={mqttPass} onChange={e => setMqttPass(e.target.value)} placeholder="usuario nodo" autoComplete="new-password" /></label>
       </div>
       <span className="flex flex-wrap items-center gap-2">

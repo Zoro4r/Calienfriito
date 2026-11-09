@@ -112,7 +112,7 @@ export function Kpi({ label, value, unit, tone, status, hint }: {
 
 // Modal dialog: title bar, body and footer. Escape or clicking outside closes it.
 export function Dialog({ title, onClose, children, footer, size = 'md' }: {
-  title: ReactNode; onClose: () => void; children: ReactNode; footer?: ReactNode; size?: 'sm' | 'md' | 'lg' | 'xl'
+  title: ReactNode; onClose: () => void; children: ReactNode; footer?: ReactNode; size?: 'sm' | 'md' | 'wide' | 'lg' | 'xl'
 }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
@@ -125,7 +125,7 @@ export function Dialog({ title, onClose, children, footer, size = 'md' }: {
         role="dialog"
         aria-modal="true"
         onMouseDown={e => e.stopPropagation()}
-        className={`surface flex max-h-[calc(100vh-2rem)] w-full flex-col rounded-xl shadow-2xl ${size === 'sm' ? 'max-w-sm' : size === 'lg' ? 'max-w-3xl' : size === 'xl' ? 'max-w-6xl' : 'max-w-lg'}`}
+        className={`surface flex max-h-[calc(100vh-2rem)] w-full flex-col rounded-xl shadow-2xl ${size === 'sm' ? 'max-w-sm' : size === 'wide' ? 'max-w-2xl' : size === 'lg' ? 'max-w-3xl' : size === 'xl' ? 'max-w-6xl' : 'max-w-lg'}`}
       >
         <header className="flex shrink-0 items-center justify-between border-b border-slate-800 px-4 py-3">
           <h2 className="section-title">{title}</h2>
