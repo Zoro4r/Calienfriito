@@ -224,8 +224,9 @@ export default function NodeControl({ roomId, nodeState, stateAt, online, canCon
                 ))}
               </div>
             </div>
-          ) : <div />}
-          <div>
+          ) : null}
+          {/* Without the power choice, Durante takes the whole row. */}
+          <div className={pick === 'fan' ? '' : 'col-span-2'}>
             <p className="mb-1.5 text-xs text-slate-400">Durante</p>
             <div className="segmented grid grid-cols-4 p-0.5">
               {DURATIONS.map(d => (
