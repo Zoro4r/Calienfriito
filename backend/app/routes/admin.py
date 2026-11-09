@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
 from starlette.concurrency import run_in_threadpool
 
-from app.config import LOCAL_UTC_OFFSET_HOURS
+from app.config import LOCAL_UTC_OFFSET_HOURS, NODE_MQTT_HOST, NODE_MQTT_PORT, NODE_MQTT_USER
 from app.core.timeutils import ensure_local, to_local
 from app.database import get_db
 from app.database_sql import get_db_sql
@@ -682,6 +682,20 @@ def provision_sensor(
         current_user.username, device.id, device.room_id,
     )
     return {"sensor_id": device.id, "room_id": device.room_id, "is_active": device.is_active, "control_enabled": device.control_enabled}
+
+
+class NodeConfigOut(BaseModel):
+    host: Optional[str] = None   # None: no public broker configured for nodes
+    port: int
+    user: str
+    tls: bool
+
+
+@router.get("/node-config", response_model=NodeConfigOut, responses={401: {"model": ErrorDetail}, 403: {"model": ErrorDetail}})
+def node_config(current_user: User = Depends(get_current_user)):
+    """Broker settings a physical node needs to publish here ("Conectar nodo"). Never includes the password."""
+    _require_admin(current_user)
+    return {"host": NODE_MQTT_HOST or None, "port": NODE_MQTT_PORT, "user": NODE_MQTT_USER, "tls": NODE_MQTT_PORT == 8883}
 
 
 # ── User management endpoints (admin-only) ────────────────────────────────────

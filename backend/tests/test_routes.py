@@ -81,6 +81,27 @@ def test_admin_can_reload_model(as_role):
     assert res.json()["engine"] in ("ml", "heuristic")
 
 
+def test_collaborator_cannot_read_node_config(as_role):
+    as_role("collaborator")
+    assert client.get("/api/v1/admin/node-config").status_code == 403
+
+
+def test_node_config_serves_broker_without_password(as_role, monkeypatch):
+    from app.routes import admin as admin_routes
+    monkeypatch.setattr(admin_routes, "NODE_MQTT_HOST", "broker.example")
+    as_role("admin")
+    res = client.get("/api/v1/admin/node-config")
+    assert res.status_code == 200
+    assert res.json() == {"host": "broker.example", "port": 8883, "user": "nodo", "tls": True}
+
+
+def test_node_config_without_public_broker(as_role, monkeypatch):
+    from app.routes import admin as admin_routes
+    monkeypatch.setattr(admin_routes, "NODE_MQTT_HOST", "")
+    as_role("admin")
+    assert client.get("/api/v1/admin/node-config").json()["host"] is None
+
+
 def test_sensor_ingest_rejects_wrong_api_key(monkeypatch):
     monkeypatch.setattr(deps, "WATSON_EXTENSION_KEY", "expected-key")
     res = client.post("/api/v1/sensors/", json={}, headers={"X-API-Key": "wrong"})

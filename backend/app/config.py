@@ -38,3 +38,10 @@ MQTT_ENABLED = os.getenv("MQTT_ENABLED", "false").lower() in ("1", "true", "yes"
 MQTT_HOST = os.getenv("MQTT_HOST", "localhost")
 MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
 MQTT_TOPIC = os.getenv("MQTT_TOPIC", "ccs/+/telemetry")
+
+# How a physical node reaches the broker from outside (shown in "Conectar nodo").
+# Empty host: the deployment has no public broker and the dialog says so.
+# The password is never served: it is typed on the node by hand.
+NODE_MQTT_HOST = os.getenv("NODE_MQTT_HOST", "")
+NODE_MQTT_PORT = int(os.getenv("NODE_MQTT_PORT", "8883"))
+NODE_MQTT_USER = os.getenv("NODE_MQTT_USER", "nodo")
