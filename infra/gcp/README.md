@@ -6,7 +6,7 @@ Despliega la rama `ccs-prod`.
 
 | Archivo | Para qué |
 |---|---|
-| `../docker-compose.gcp.yml` | Overlay sobre `docker-compose.yml` y `docker-compose.prod.yml`: monta la config de nginx para este dominio y le da a Mosquitto un listener TLS con contraseña. |
+| `../docker-compose.gcp.yml` | Overlay sobre `docker-compose.yml` y `docker-compose.prod.yml`: monta la config de nginx para este dominio, le da a Mosquitto un listener TLS con contraseña y le dice al backend cómo llegan los nodos al broker (`NODE_MQTT_*`, lo que muestra "Conectar nodo"). |
 | `nginx.gcp.conf` | Copia de `frontend/nginx.prod.conf` con el dominio `35.239.3.148.sslip.io`. |
 | `mosquitto.gcp.conf` | 1883 sin clave solo para el backend dentro de Docker (cerrado hacia internet); 8883 con TLS y usuario. |
 | `mqtt-certs-hook.sh` | Hook de certbot: copia el certificado para Mosquitto y reinicia Mosquitto y nginx al renovarse. |

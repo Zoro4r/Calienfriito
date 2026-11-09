@@ -1,6 +1,13 @@
 # GCP VM overlay, on top of docker-compose.yml and infra/docker-compose.prod.yml.
-# Swaps the domain-specific nginx config and gives Mosquitto a TLS listener with a password.
+# Swaps the domain-specific nginx config, gives Mosquitto a TLS listener with a password and
+# tells the backend how nodes reach the broker. Public settings only: secrets stay in .env.
 services:
+  backend:
+    environment:
+      # Shown in Aulas → "Conectar nodo". The broker password is never here.
+      NODE_MQTT_HOST: 35.239.3.148.sslip.io
+      NODE_MQTT_PORT: "8883"
+      NODE_MQTT_USER: nodo
   frontend:
     volumes:
       - ./infra/gcp/nginx.gcp.conf:/etc/nginx/conf.d/default.conf:ro
