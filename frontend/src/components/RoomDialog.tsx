@@ -7,6 +7,8 @@ import { Dialog } from './ui'
 
 // Room form: editing lives in Infraestructura (RoomDialog); creating, together with the
 // node, in Aulas (NewRoomDialog). Both share the fields, checks and history warnings below.
+// A new room only asks for its name, which is also its code (the AULA of the ESP32), plus an
+// optional building and floor; capacity and target temperature start with defaults.
 
 interface RoomForm { id: string; name: string; building: string; floor: string; max_capacity: string; target_temp: string }
 const EMPTY_ROOM: RoomForm = { id: '', name: '', building: '', floor: '', max_capacity: '30', target_temp: '24' }
@@ -30,7 +32,8 @@ export function useRoomForm(original: Room | null) {
   const [orphans, setOrphans] = useState<Impact | null>(null)
   const [inheritOk, setInheritOk] = useState(false)
 
-  const code = f.id.trim()
+  // New room: the name is the code.
+  const code = (original ? f.id : f.name).trim()
   const renaming = !!original && code !== '' && code !== original.id
 
   useEffect(() => {
@@ -50,15 +53,21 @@ export function useRoomForm(original: Room | null) {
   }, [code, original])
 
   const problems: string[] = []
-  if (!code) problems.push('Indica el código del aula.')
-  if (!f.name.trim()) problems.push('Indica el nombre.')
+  if (!original) {
+    if (!code) problems.push('Indica el nombre del aula.')
+    // It becomes part of the MQTT topics ccs/<aula>/…: no spaces, + or #.
+    else if (!/^[A-Za-z0-9_-]{1,20}$/.test(code)) problems.push('Usa solo letras, números, - o _, sin espacios (máx. 20).')
+  } else {
+    if (!code) problems.push('Indica el código del aula.')
+    if (!f.name.trim()) problems.push('Indica el nombre.')
+  }
   if (!(Number(f.max_capacity) > 0)) problems.push('La capacidad debe ser mayor que 0.')
   const t = Number(f.target_temp)
   if (!(t >= 16 && t <= 30)) problems.push('La temperatura objetivo debe estar entre 16 y 30 °C.')
   if (orphans && !inheritOk) problems.push('Confirma que la nueva aula heredará el historial existente.')
 
   const body = {
-    name: f.name.trim(),
+    name: original ? f.name.trim() : code,
     max_capacity: Number(f.max_capacity),
     target_temp: Number(f.target_temp),
     building: f.building.trim() || null,
@@ -77,6 +86,17 @@ export function RoomFields({ form, onSubmit }: { form: FormState; onSubmit: () =
       <span className="field-label">{label}</span>
       <input className={`field ${props.type === 'number' ? NUM_INPUT_MODS : ''}`} value={f[key]} onChange={e => setF({ ...f, [key]: e.target.value })} {...props} />
     </label>
+  )
+  if (!original) return (
+    <form className="grid grid-cols-2 gap-3" onSubmit={e => { e.preventDefault(); onSubmit() }}>
+      <div className="col-span-2">
+        {field('name', 'Nombre', { placeholder: 'ej. B201', maxLength: 20, autoFocus: true })}
+        <span className="mt-1 block text-xs text-slate-500">Es también el código del aula: el que pondrás como AULA en el ESP32.</span>
+      </div>
+      {field('building', 'Edificio (opcional)', { placeholder: 'ej. B', maxLength: 10 })}
+      {field('floor', 'Piso (opcional)', { type: 'number', placeholder: 'ej. 2', min: -5, max: 99 })}
+      <button type="submit" className="hidden" />
+    </form>
   )
   return <>
     <form className="grid grid-cols-2 gap-3" onSubmit={e => { e.preventDefault(); onSubmit() }}>
