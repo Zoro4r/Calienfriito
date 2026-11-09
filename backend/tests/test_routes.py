@@ -102,6 +102,40 @@ def test_node_config_without_public_broker(as_role, monkeypatch):
     assert client.get("/api/v1/admin/node-config").json()["host"] is None
 
 
+def test_node_firmware_fills_room_and_broker_only(as_role, monkeypatch):
+    from app.routes import admin as admin_routes
+    monkeypatch.setattr(admin_routes, "NODE_MQTT_HOST", "broker.example")
+    as_role("admin")
+    res = client.get("/api/v1/admin/node-firmware", params={"room": "B101"})
+    assert res.status_code == 200
+    code = res.text
+    assert '#define AULA "B101"' in code
+    assert 'MQTT_HOST = "broker.example"' in code and "MQTT_PORT = 8883" in code and 'MQTT_USER = "nodo"' in code
+    # WiFi and broker password are filled in the browser, never by the server.
+    assert "__WIFI_SSID__" in code and "__WIFI_PASS__" in code and "__MQTT_PASS__" in code
+    assert "__AULA__" not in code and "__MQTT_HOST__" not in code
+
+
+@pytest.mark.parametrize("room", ["B 101", "B#1", "ccs/+", "x" * 21])
+def test_node_firmware_rejects_unsafe_room_codes(as_role, monkeypatch, room):
+    from app.routes import admin as admin_routes
+    monkeypatch.setattr(admin_routes, "NODE_MQTT_HOST", "broker.example")
+    as_role("admin")
+    assert client.get("/api/v1/admin/node-firmware", params={"room": room}).status_code == 422
+
+
+def test_node_firmware_needs_public_broker(as_role, monkeypatch):
+    from app.routes import admin as admin_routes
+    monkeypatch.setattr(admin_routes, "NODE_MQTT_HOST", "")
+    as_role("admin")
+    assert client.get("/api/v1/admin/node-firmware", params={"room": "B101"}).status_code == 409
+
+
+def test_collaborator_cannot_download_node_firmware(as_role):
+    as_role("collaborator")
+    assert client.get("/api/v1/admin/node-firmware", params={"room": "B101"}).status_code == 403
+
+
 def test_sensor_ingest_rejects_wrong_api_key(monkeypatch):
     monkeypatch.setattr(deps, "WATSON_EXTENSION_KEY", "expected-key")
     res = client.post("/api/v1/sensors/", json={}, headers={"X-API-Key": "wrong"})

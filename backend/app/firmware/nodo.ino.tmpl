@@ -1,0 +1,899 @@
+// Nodo fisico del aula __AULA__, generado por el dashboard (Aulas -> Nueva aula / Conectar nodo).
+// Es el firmware de ccs/hardware/firmware/src/sketch.ino con los ajustes del hardware real:
+// telemetria y tacometro reales, y envio por internet al servidor con TLS.
+// Ya trae el aula, el servidor y tu WiFi. Solo queda calibrar OCCUPANCY_ADC_THRESHOLD (busca AJUSTA).
+// Necesita las librerias "DHT sensor library" (Adafruit) y "PubSubClient" (Nick O'Leary).
+
+/*
+ * ============================================================================
+ *  Calienfriito - firmware de simulacion (Wokwi)
+ *  Nodo de control termico (aula definida en AULA)
+ *  CS5055 Internet of Things - UTEC 2026-2
+ * ============================================================================
+ *
+ *  Funciones:
+ *   1) Lectura de DHT22 (temperatura/humedad), MQ-135 (proxy de CO2 y de
+ *      ocupacion) y MQ-7 (proxy de CO en ppm).
+ *   2) Heuristica de control con setpoint de 24.0 C:
+ *      ventilador ON con T >= 24.5 C y OFF con T <= 24.0 C;
+ *      calefactor ON con T <= 23.5 C y OFF con T >= 24.0 C.
+ *      Ventilador y calefactor nunca estan encendidos a la vez. Intervalo
+ *      minimo de 60 s entre cambios de cualquier actuador (ventilador o
+ *      calefactor), en ambos sentidos. Estados:
+ *      COOLING, HEATING, PRE_COOLING, STANDBY, DISABLED.
+ *   3) Alarma de CO evaluada localmente, antes que cualquier otra logica e
+ *      independiente de la red. Apaga el calefactor.
+ *   4) Telemetria por MQTT (incluye el motivo de cada decision), con Last Will
+ *      ("offline") en el topico de estado y los umbrales retenidos en el de
+ *      config. La consumen el backend (ccs/+/telemetry) y el monitor del nodo.
+ *      Keepalive de 5 s: si el nodo cae, el broker publica "offline" en ~7.5 s.
+ *   5) Control manual desde el dashboard (ccs/<aula>/command, retenido):
+ *      {"modo":"manual","accion":"COOLING"|"HEATING"|"STANDBY","duracion_s":900,"nivel":50}
+ *      fuerza el ventilador (al "nivel" % de potencia, 100 si falta), el
+ *      calefactor o ambos apagados durante ese tiempo;
+ *      {"modo":"auto"} vuelve a la heuristica.
+ *      La alarma de CO siempre tiene prioridad sobre el control manual.
+ *
+ *  Formato del log serie:
+ *     [  tiempo s] ETIQ  mensaje
+ *   Etiquetas: SIS sistema | RED red | EVT eventos (transiciones, alarmas)
+ *
+ *   Cada lectura se muestra como un bloque, con la hora una sola vez y una
+ *   fila por sensor y por actuador:
+ *     +-- CICLO 8   | t =   16.5 s ------------------------------
+ *     | SENSORES
+ *     |   DHT22      T = 26.0 C    CALIDO (T >= 24.5 C)
+ *     |              HR = 55 %     MODERADO (40 % < HR < 60 %)
+ *     |   MQ-135     ADC 2800/4095   AULA OCUPADA (ADC >= 2200)
+ *     |   MQ-7       CO = 91 ppm   ALARMA (CO >= 50 ppm)
+ *     | DECISION
+ *     |   Estado     ALARMA DE CO - Control de clima suspendido
+ *     |   Motivo     CO >= 50 ppm: ventilador al 100 % y buzzer ON
+ *     | ACTUADORES
+ *     |   Ventilador ON  [##########] 100 %   (LED amarillo)
+ *     |   Calefactor OFF                      (LED naranja)
+ *     |   Buzzer     ON
+ *     |   LED RGB    ON  ROJO (Alarma CO)
+ *     +------------------------------------------------
+ *   LOG_CADA_N_CICLOS permite imprimir el bloque cada N lecturas (por defecto
+ *   2: se lee cada 1 s y el bloque sale cada 2 s).
+ *
+ *  Limites de la simulacion:
+ *   - MQ-135 y MQ-7 se representan con potenciometros: permiten probar
+ *     umbrales y logica, no la respuesta quimica real de los sensores.
+ *   - El LED amarillo representa el PWM que en hardware va al MOSFET del
+ *     ventilador de 12 V.
+ *   - El LED naranja representa la salida digital que en hardware va al
+ *     MOSFET del calefactor PTC de 12 V.
+ *   - PRE_COOLING lo dispara el modelo de IA (requiere la ocupacion esperada
+ *     segun la reserva); este firmware implementa solo la heuristica.
+ *   - PubSubClient publica en QoS 0 (el subscribe usa QoS 1).
+ *   - El hardware real tambien usa DHT22 (±0.5 C, resolucion 0.1 C): la banda
+ *     de ±0.5 C de la histeresis no se puede resolver con un DHT11 (±2 C, 1 C).
+ * ============================================================================
+ */
+
+#include <DHT.h>      // Adafruit "DHT sensor library" (verificada en Wokwi con el
+                      // core ESP32 3.x; DHTesp da TIMEOUT con ese core)
+#include <WiFi.h>
+#include <PubSubClient.h>
+#include <WiFiClientSecure.h>  // MQTT con TLS hacia el servidor
+
+// ---------------- Compatibilidad PWM entre cores de Arduino-ESP32 ------------
+// Core >= 3.0: ledcAttach(pin, freq, res) + ledcWrite(pin, duty).
+// Core <  3.0: ledcSetup(canal, freq, res) + ledcAttachPin(pin, canal)
+//              + ledcWrite(canal, duty).
+#if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
+  #define CCS_LEDC_API_NUEVA 1
+#else
+  #define CCS_LEDC_API_NUEVA 0
+#endif
+#define FAN_PWM_CHANNEL 0 // solo se usa con la API antigua
+
+// ------------------------- INA219 (opcional) -------------------------------
+// #include <Wire.h>
+// #include <Adafruit_INA219.h>
+// Adafruit_INA219 ina219;
+
+// ---------------------------- Pines -----------------------------------------
+#define DHTPIN       4    // D4
+#define DHTTYPE      DHT22
+#define MQ135_PIN    34   // D34 (ADC1_CH6)
+#define MQ7_PIN      35   // D35 (ADC1_CH7)
+#define FAN_PWM_PIN  25   // D25 -> cable PWM (azul) del ventilador de PC de 4 pines (aqui: LED amarillo)
+#define FAN_TACH_PIN 33   // D33 <- tacometro (verde) del ventilador: 2 pulsos por vuelta
+#define BUZZER_PIN   26   // D26
+#define LED_R_PIN    13   // D13
+#define LED_G_PIN    14   // D14
+#define LED_B_PIN    27   // D27
+#define HEATER_PIN   32   // D32 -> MOSFET del calefactor PTC (aqui: LED naranja)
+
+// ------------------- Parametros de control (del informe) --------------------
+const float SETPOINT_C                = 24.0;    // temperatura objetivo
+const float HYSTERESIS_C              = 0.5;     // banda muerta +-0.5 C
+// Umbrales derivados: ventilador ON con T >= 24.5 C, calefactor ON con
+// T <= 23.5 C; ambos se apagan al volver al setpoint (24.0 C). Asi, al
+// terminar de enfriar no se activa el calefactor, ni al reves.
+const float T_VENTILADOR_ON_C         = SETPOINT_C + HYSTERESIS_C; // 24.5 C
+const float T_CALEFACTOR_ON_C         = SETPOINT_C - HYSTERESIS_C; // 23.5 C
+const float T_APAGADO_C               = SETPOINT_C;                // 24.0 C
+// Caudal proporcional al enfriar (tres niveles, en vez de ON/OFF binario):
+//   50 % de 24.5 a 25.0 C, 75 % de 25.0 a 25.5 C, 100 % desde 25.5 C o con CO2 alto.
+// Baja de nivel solo 0.2 C por debajo del umbral, para no oscilar entre niveles.
+const float T_NIVEL_75_C              = 25.0;
+const float T_NIVEL_100_C             = 25.5;
+const float CO2_NIVEL_100_PPM         = 1500.0;
+const float BANDA_NIVEL_C             = 0.2;
+const unsigned long MIN_ON_MS         = 60000UL; // intervalo minimo on/off
+// Umbrales de humedad: PROVISIONALES y solo informativos (clasifican la lectura en
+// el log; no intervienen en ninguna decision de control). Pendiente de definir su fuente.
+const float HR_ALTA_PCT               = 60.0;    // HR >= 60 %  -> HUMEDO
+const float HR_BAJA_PCT               = 40.0;    // HR <= 40 %  -> SECO
+const int CO_ALARM_PPM                = 50;      // umbral de alarma de CO
+const int OCCUPANCY_ADC_THRESHOLD     = 300;     // AJUSTA: entre el MQ-135 sin nadie y soplando (mira el CICLO)
+// Conversion SIMULADA del MQ-135 a ppm de CO2 (lineal, 0-4095 -> 400-2000 ppm) para
+// el backend, que estima la ocupacion como (CO2 - 420) / 25 personas. En hardware
+// real se reemplaza por la calibracion en dos puntos (aula vacia / aula llena).
+const float CO2_PPM_MIN               = 400.0;
+const float CO2_PPM_MAX               = 2000.0;
+// La telemetria viaja marcada como simulada: el backend la separa de la real.
+const bool  TELEMETRIA_SIMULADA       = false;
+// Wokwi no tiene ventilador con tacometro: las RPM se estiman de la potencia ordenada.
+// En hardware real poner false y se cuentan los pulsos del cable verde.
+const bool  TACOMETRO_SIMULADO        = false;
+const int   FAN_PULSOS_POR_VUELTA     = 2;      // estandar de los ventiladores de PC
+const int   FAN_RPM_MAX               = 1800;   // ventilador de 120 mm a 12 V (para la simulacion)
+const int   FAN_PWM_HZ                = 25000;  // estandar Intel para ventiladores de 4 pines: inaudible
+// Periodo de muestreo, control y telemetria MQTT (el dashboard recibe 1 dato/s).
+// El DHT22 solo se lee cada 2 s (limite de la libreria Adafruit): entre medio
+// devuelve la ultima lectura. MQ-135 y MQ-7 si se leen en cada ciclo.
+const unsigned long PERIODO_LECTURA_MS = 1000;
+
+// ------------------------------ Red / MQTT -----------------------------------
+const char* WIFI_SSID = "__WIFI_SSID__";  // red WiFi de 2.4 GHz
+const char* WIFI_PASS = "__WIFI_PASS__";
+// Broker LOCAL: Mosquitto del docker-compose (o tools/broker-local sin Docker).
+// "host.wokwi.internal" es como la simulacion de Wokwi llega al computador.
+const char* MQTT_HOST = "__MQTT_HOST__"; // servidor del dashboard
+const int   MQTT_PORT = __MQTT_PORT__;  // MQTT con TLS
+const char* MQTT_USER = "__MQTT_USER__";
+const char* MQTT_PASS = "__MQTT_PASS__"; // clave del broker: no subas este archivo a git
+// Raices de Let's Encrypt (ISRG Root X1 y X2): el ESP32 verifica que habla con el servidor real.
+const char* MQTT_ROOT_CA = R"PEM(
+-----BEGIN CERTIFICATE-----
+MIIFazCCA1OgAwIBAgIRAIIQz7DSQONZRGPgu2OCiwAwDQYJKoZIhvcNAQELBQAw
+TzELMAkGA1UEBhMCVVMxKTAnBgNVBAoTIEludGVybmV0IFNlY3VyaXR5IFJlc2Vh
+cmNoIEdyb3VwMRUwEwYDVQQDEwxJU1JHIFJvb3QgWDEwHhcNMTUwNjA0MTEwNDM4
+WhcNMzUwNjA0MTEwNDM4WjBPMQswCQYDVQQGEwJVUzEpMCcGA1UEChMgSW50ZXJu
+ZXQgU2VjdXJpdHkgUmVzZWFyY2ggR3JvdXAxFTATBgNVBAMTDElTUkcgUm9vdCBY
+MTCCAiIwDQYJKoZIhvcNAQEBBQADggIPADCCAgoCggIBAK3oJHP0FDfzm54rVygc
+h77ct984kIxuPOZXoHj3dcKi/vVqbvYATyjb3miGbESTtrFj/RQSa78f0uoxmyF+
+0TM8ukj13Xnfs7j/EvEhmkvBioZxaUpmZmyPfjxwv60pIgbz5MDmgK7iS4+3mX6U
+A5/TR5d8mUgjU+g4rk8Kb4Mu0UlXjIB0ttov0DiNewNwIRt18jA8+o+u3dpjq+sW
+T8KOEUt+zwvo/7V3LvSye0rgTBIlDHCNAymg4VMk7BPZ7hm/ELNKjD+Jo2FR3qyH
+B5T0Y3HsLuJvW5iB4YlcNHlsdu87kGJ55tukmi8mxdAQ4Q7e2RCOFvu396j3x+UC
+B5iPNgiV5+I3lg02dZ77DnKxHZu8A/lJBdiB3QW0KtZB6awBdpUKD9jf1b0SHzUv
+KBds0pjBqAlkd25HN7rOrFleaJ1/ctaJxQZBKT5ZPt0m9STJEadao0xAH0ahmbWn
+OlFuhjuefXKnEgV4We0+UXgVCwOPjdAvBbI+e0ocS3MFEvzG6uBQE3xDk3SzynTn
+jh8BCNAw1FtxNrQHusEwMFxIt4I7mKZ9YIqioymCzLq9gwQbooMDQaHWBfEbwrbw
+qHyGO0aoSCqI3Haadr8faqU9GY/rOPNk3sgrDQoo//fb4hVC1CLQJ13hef4Y53CI
+rU7m2Ys6xt0nUW7/vGT1M0NPAgMBAAGjQjBAMA4GA1UdDwEB/wQEAwIBBjAPBgNV
+HRMBAf8EBTADAQH/MB0GA1UdDgQWBBR5tFnme7bl5AFzgAiIyBpY9umbbjANBgkq
+hkiG9w0BAQsFAAOCAgEAVR9YqbyyqFDQDLHYGmkgJykIrGF1XIpu+ILlaS/V9lZL
+ubhzEFnTIZd+50xx+7LSYK05qAvqFyFWhfFQDlnrzuBZ6brJFe+GnY+EgPbk6ZGQ
+3BebYhtF8GaV0nxvwuo77x/Py9auJ/GpsMiu/X1+mvoiBOv/2X/qkSsisRcOj/KK
+NFtY2PwByVS5uCbMiogziUwthDyC3+6WVwW6LLv3xLfHTjuCvjHIInNzktHCgKQ5
+ORAzI4JMPJ+GslWYHb4phowim57iaztXOoJwTdwJx4nLCgdNbOhdjsnvzqvHu7Ur
+TkXWStAmzOVyyghqpZXjFaH3pO3JLF+l+/+sKAIuvtd7u+Nxe5AW0wdeRlN8NwdC
+jNPElpzVmbUq4JUagEiuTDkHzsxHpFKVK7q4+63SM1N95R1NbdWhscdCb+ZAJzVc
+oyi3B43njTOQ5yOf+1CceWxG1bQVs5ZufpsMljq4Ui0/1lvh+wjChP4kqKOJ2qxq
+4RgqsahDYVvTH9w7jXbyLeiNdd8XM2w9U/t7y0Ff/9yi0GE44Za4rF2LN9d11TPA
+mRGunUHBcnWEvgJBQl9nJEiU0Zsnvgc/ubhPgXRR4Xq37Z0j4r7g1SgEEzwxA57d
+emyPxgcYxn/eR44/KJ4EBs+lVDR3veyJm+kXQ99b21/+jh5Xos1AnX5iItreGCc=
+-----END CERTIFICATE-----
+-----BEGIN CERTIFICATE-----
+MIICGzCCAaGgAwIBAgIQQdKd0XLq7qeAwSxs6S+HUjAKBggqhkjOPQQDAzBPMQsw
+CQYDVQQGEwJVUzEpMCcGA1UEChMgSW50ZXJuZXQgU2VjdXJpdHkgUmVzZWFyY2gg
+R3JvdXAxFTATBgNVBAMTDElTUkcgUm9vdCBYMjAeFw0yMDA5MDQwMDAwMDBaFw00
+MDA5MTcxNjAwMDBaME8xCzAJBgNVBAYTAlVTMSkwJwYDVQQKEyBJbnRlcm5ldCBT
+ZWN1cml0eSBSZXNlYXJjaCBHcm91cDEVMBMGA1UEAxMMSVNSRyBSb290IFgyMHYw
+EAYHKoZIzj0CAQYFK4EEACIDYgAEzZvVn4CDCuwJSvMWSj5cz3es3mcFDR0HttwW
++1qLFNvicWDEukWVEYmO6gbf9yoWHKS5xcUy4APgHoIYOIvXRdgKam7mAHf7AlF9
+ItgKbppbd9/w+kHsOdx1ymgHDB/qo0IwQDAOBgNVHQ8BAf8EBAMCAQYwDwYDVR0T
+AQH/BAUwAwEB/zAdBgNVHQ4EFgQUfEKWrt5LSDv6kviejM9ti6lyN5UwCgYIKoZI
+zj0EAwMDaAAwZQIwe3lORlCEwkSHRhtFcP9Ymd70/aTSVaYgLXTWNLxBo1BfASdW
+tL4ndQavEi51mI38AjEAi/V3bNTIZargCyzuFJ0nN6T5U6VR5CmD1/iQMVtCnwr1
+/q4AaOeMSQ+2b1tbFfLn
+-----END CERTIFICATE-----
+)PEM";
+// Topicos de PROYECTO_REDEFINIDO (seccion 6.3). El backend se suscribe a ccs/+/telemetry.
+#define AULA "__AULA__"                // el aula del nodo
+const char* TOPIC_TELEMETRY = "ccs/" AULA "/telemetry";
+const char* TOPIC_STATUS    = "ccs/" AULA "/status";
+const char* TOPIC_CMD       = "ccs/" AULA "/command";
+const char* TOPIC_CONFIG    = "ccs/" AULA "/config"; // umbrales, retenido (lo lee el monitor del nodo)
+const char* CLIENT_ID_BASE  = "ccs-" AULA "-nodo";
+const unsigned long WIFI_TIMEOUT_MS = 10000UL;
+// Reconexion MQTT cada 5 s fijos (MIN = MAX). Para volver a una espera creciente (RF-11)
+// basta con subir MQTT_RETRY_MAX_MS; la logica de duplicar ya esta en intentarMQTT().
+const unsigned long MQTT_RETRY_MIN_MS = 5000UL;
+const unsigned long MQTT_RETRY_MAX_MS = 5000UL;
+unsigned long mqttEsperaMs = MQTT_RETRY_MIN_MS;         // espera antes del proximo intento
+unsigned long mqttProximaEsperaMs = MQTT_RETRY_MIN_MS;  // la que se aplicara si este falla
+bool huboIntentoMqtt = false;                          // el primer intento no espera
+
+DHT dht(DHTPIN, DHTTYPE);
+WiFiClientSecure espClient;
+PubSubClient mqtt(espClient);
+String clientId; // sufijo aleatorio: en un broker publico, dos nodos con el
+                 // mismo ID se expulsan entre si
+
+// ------------------------------ Estado ---------------------------------------
+// Prefijo ACCION_ para evitar choques con macros del core (p. ej. DISABLED).
+enum Accion { ACCION_COOLING, ACCION_HEATING, ACCION_PRE_COOLING, ACCION_STANDBY, ACCION_DISABLED };
+Accion accionActual = ACCION_STANDBY;
+
+unsigned long ultimoCambioMs = 0;
+bool huboCambioActuador = false;   // el primer arranque no espera los 60 s
+bool alarmaCO = false;
+bool alarmaCOPrevia = false;
+bool wifiOk = false;
+bool mqttEstabaConectado = false;
+unsigned long ultimoIntentoMqttMs = 0;
+unsigned long ultimaLecturaMs = 0;
+
+// Estado real de los actuadores, para reportarlo en el log
+int dutyVentilador = 0;            // 0-255
+int rpmVentilador = 0;             // vueltas por minuto medidas (o estimadas en Wokwi)
+volatile unsigned long pulsosTacometro = 0;
+unsigned long ultimaMedicionRpmMs = 0;
+int nivelManual = 100;             // % de potencia del ventilador en una orden manual
+int nivelReglas = 50;              // % de potencia que piden las reglas al enfriar (50/75/100)
+bool calefactorEncendido = false;
+const char* colorLed = "APAGADO";
+bool ledRojoOn = false, ledVerdeOn = false, ledAzulOn = false;
+bool buzzerEncendido = false;
+
+// Justificacion de la ultima decision, para reportarla en el log
+char motivoDecision[128] = "";
+
+// Bloqueo por histeresis: segundos que faltan para aplicar el estado pendiente
+// (0 = sin bloqueo). Se publica en la telemetria para el candado del dashboard.
+unsigned long bloqueoSegundos = 0;
+Accion accionPendiente = ACCION_STANDBY;
+
+// Control manual (RF-26): accion forzada desde el dashboard hasta manualHastaMs.
+bool manualActivo = false;
+Accion accionManual = ACCION_STANDBY;
+unsigned long manualHastaMs = 0;
+const unsigned long MANUAL_MAX_S = 4UL * 3600UL;   // tope de seguridad: 4 h
+
+// ------------------------------- Log -----------------------------------------
+// Toda linea termina en "\r\n" (como Serial.println). Con "\n" solo, la Wokwi
+// Terminal de VS Code baja de linea sin volver a la columna 0 y el log sale en escalera.
+void logInicio(const char* etiqueta) {
+  Serial.printf("[%8.1f s] %-4s ", millis() / 1000.0, etiqueta);
+}
+#define LOG(etiqueta, ...) do { logInicio(etiqueta); Serial.printf(__VA_ARGS__); Serial.println(); } while (0)
+
+// Fila de un dispositivo en el arranque: el nombre ocupa una columna fija de
+// 11 caracteres para que todas las filas queden alineadas en el monitor.
+#define LOGF(etiqueta, nombre, ...) do { logInicio(etiqueta); Serial.printf("%-11s| ", nombre); Serial.printf(__VA_ARGS__); Serial.println(); } while (0)
+
+// ----------------------- Bloque de ciclo (sensores/decision/actuadores) -------
+// 2 = un bloque cada 2 ciclos (cada 2 s): el monitor serie no duplica su volumen
+// aunque la telemetria salga cada segundo. Los eventos EVT se imprimen siempre.
+const unsigned long LOG_CADA_N_CICLOS = 2;
+unsigned long numeroCiclo = 0;
+
+// Barra de 10 posiciones: "[#####-----]". El buffer debe tener >= 13 bytes.
+void barraNivel(int porcentaje, char* buf) {
+  int llenos = (porcentaje * 10 + 50) / 100;
+  buf[0] = '[';
+  for (int i = 0; i < 10; i++) buf[1 + i] = (i < llenos) ? '#' : '-';
+  buf[11] = ']';
+  buf[12] = '\0';
+}
+
+void imprimirEncabezado() {
+  Serial.println();
+  Serial.println("==================================================================");
+  Serial.println(" Calienfriito - Nodo de control termico, Aula " AULA);
+  Serial.println(" CS5055 Internet of Things - UTEC 2026-2 (simulacion en Wokwi)");
+  Serial.println("------------------------------------------------------------------");
+  Serial.printf(" Setpoint: %.1f C | Intervalo minimo entre cambios de actuador: %lu s\r\n",
+                SETPOINT_C, MIN_ON_MS / 1000);
+  Serial.printf(" Ventilador: ON con T >= %.1f C, OFF con T <= %.1f C\r\n",
+                T_VENTILADOR_ON_C, T_APAGADO_C);
+  Serial.printf(" Calefactor: ON con T <= %.1f C, OFF con T >= %.1f C\r\n",
+                T_CALEFACTOR_ON_C, T_APAGADO_C);
+  Serial.printf(" Umbral de ocupacion (MQ-135): %d/4095 | Umbral de CO: %d ppm\r\n",
+                OCCUPANCY_ADC_THRESHOLD, CO_ALARM_PPM);
+  Serial.printf(" Periodo de muestreo y telemetria: %lu s | Bloque CICLO cada %lu s\r\n",
+                PERIODO_LECTURA_MS / 1000, PERIODO_LECTURA_MS * LOG_CADA_N_CICLOS / 1000);
+  Serial.println("------------------------------------------------------------------");
+  Serial.println(" Etiquetas: SIS sistema | RED red | EVT eventos");
+  Serial.println(" Cada lectura se muestra como un bloque CICLO (sensores, decision, actuadores)");
+  Serial.println("==================================================================");
+}
+
+const char* nombreAccion(Accion a) {
+  switch (a) {
+    case ACCION_COOLING:     return "COOLING";
+    case ACCION_HEATING:     return "HEATING";
+    case ACCION_PRE_COOLING: return "PRE_COOLING";
+    case ACCION_STANDBY:     return "STANDBY";
+    case ACCION_DISABLED:    return "DISABLED";
+  }
+  return "STANDBY";
+}
+
+// Significado del estado, para que el log se entienda sin conocer el codigo.
+const char* descripcionAccion(Accion a) {
+  switch (a) {
+    case ACCION_COOLING:     return "Enfriando";
+    case ACCION_HEATING:     return "Calentando";
+    case ACCION_PRE_COOLING: return "Pre-enfriamiento";
+    case ACCION_STANDBY:     return "En espera";
+    case ACCION_DISABLED:    return "Desactivado";
+  }
+  return "En espera";
+}
+
+// ---------------------------- Actuadores --------------------------------------
+void escribirPWMVentilador(int duty) {
+#if CCS_LEDC_API_NUEVA
+  ledcWrite(FAN_PWM_PIN, duty);
+#else
+  ledcWrite(FAN_PWM_CHANNEL, duty);
+#endif
+  dutyVentilador = duty;
+}
+
+void escribirCalefactor(bool encendido) {
+  digitalWrite(HEATER_PIN, encendido ? HIGH : LOW);
+  calefactorEncendido = encendido;
+}
+
+void escribirBuzzer(bool encendido) {
+  digitalWrite(BUZZER_PIN, encendido ? HIGH : LOW);
+  buzzerEncendido = encendido;
+}
+
+void escribirLed(bool r, bool g, bool b, const char* descripcion) {
+  digitalWrite(LED_R_PIN, r ? HIGH : LOW);
+  digitalWrite(LED_G_PIN, g ? HIGH : LOW);
+  digitalWrite(LED_B_PIN, b ? HIGH : LOW);
+  ledRojoOn = r; ledVerdeOn = g; ledAzulOn = b;
+  colorLed = descripcion;
+}
+
+// Verde = en espera, Azul = enfriando, Ambar = calentando,
+// Cian = pre-enfriamiento, Apagado = aula vacia,
+// Rojo = alarma de CO (prioridad maxima)
+void setLedEstado(Accion a) {
+  if (alarmaCO) { escribirLed(true, false, false, "ROJO (Alarma CO)"); return; }
+  switch (a) {
+    case ACCION_COOLING:     escribirLed(false, false, true,  "AZUL (enfriando)"); break;
+    case ACCION_HEATING:     escribirLed(true,  true,  false, "AMBAR (calentando)"); break;
+    case ACCION_PRE_COOLING: escribirLed(false, true,  true,  "CIAN (pre-enfriamiento)"); break;
+    case ACCION_DISABLED:    escribirLed(false, false, false, "sin color (aula vacia)"); break;
+    case ACCION_STANDBY:
+    default:                 escribirLed(false, true,  false, "VERDE (en espera)"); break;
+  }
+}
+
+void IRAM_ATTR alPulsoTacometro() { pulsosTacometro++; }
+
+// RPM del ultimo periodo: pulsos del tacometro, o una estimacion lineal en Wokwi
+// (los ventiladores de PC se detienen por debajo de ~20 % de PWM).
+void medirRpmVentilador() {
+  unsigned long ahora = millis();
+  unsigned long dt = ahora - ultimaMedicionRpmMs;
+  if (dt < 500) return;
+  if (TACOMETRO_SIMULADO) {
+    rpmVentilador = dutyVentilador < 51 ? 0 : (int)((long)FAN_RPM_MAX * dutyVentilador / 255);
+  } else {
+    noInterrupts();
+    unsigned long pulsos = pulsosTacometro;
+    pulsosTacometro = 0;
+    interrupts();
+    rpmVentilador = (int)(pulsos * 60000UL / (dt * FAN_PULSOS_POR_VUELTA));
+  }
+  ultimaMedicionRpmMs = ahora;
+}
+
+int nivelPorCarga(float tempC, float co2ppm) {
+  if (tempC >= T_NIVEL_100_C || co2ppm >= CO2_NIVEL_100_PPM) return 100;
+  if (tempC >= T_NIVEL_75_C) return 75;
+  return 50;
+}
+
+// Sube de nivel en cuanto la carga lo pide; baja solo con 0.2 C de margen.
+void actualizarNivelReglas(float tempC, float co2ppm) {
+  int sube = nivelPorCarga(tempC, co2ppm);
+  int baja = nivelPorCarga(tempC + BANDA_NIVEL_C, co2ppm);
+  if (accionActual != ACCION_COOLING) nivelReglas = sube;   // al entrar a COOLING parte del nivel justo
+  else if (sube > nivelReglas) nivelReglas = sube;
+  else if (baja < nivelReglas) nivelReglas = baja;
+}
+
+int dutyDeAccion(Accion a) {
+  switch (a) {
+    case ACCION_COOLING:
+      return (manualActivo && accionManual == ACCION_COOLING ? nivelManual : nivelReglas) * 255 / 100;
+    case ACCION_PRE_COOLING: return 140;
+    default:                 return 0;
+  }
+}
+
+// El calefactor solo se enciende en HEATING, estado en el que el ventilador
+// esta apagado: ambos actuadores nunca coinciden.
+void aplicarAccion(Accion a) {
+  escribirPWMVentilador(dutyDeAccion(a));
+  escribirCalefactor(a == ACCION_HEATING);
+  setLedEstado(a);
+}
+
+// --------------------- Heuristica con histeresis -----------------------------
+// El ventilador gira en COOLING y PRE_COOLING; esta apagado en STANDBY y DISABLED.
+bool ventiladorEncendido(Accion a) {
+  return a == ACCION_COOLING || a == ACCION_PRE_COOLING;
+}
+
+// El calefactor solo esta encendido en HEATING.
+bool calefactorActivo(Accion a) {
+  return a == ACCION_HEATING;
+}
+
+Accion decidirHeuristica(float tempC, bool ocupado) {
+  unsigned long ahora = millis();
+  Accion propuesta;
+
+  if (!ocupado) {
+    propuesta = ACCION_DISABLED;
+    snprintf(motivoDecision, sizeof(motivoDecision),
+             "Aula vacia (MQ-135 < %d)", OCCUPANCY_ADC_THRESHOLD);
+  } else if (tempC >= T_VENTILADOR_ON_C) {
+    propuesta = ACCION_COOLING;
+    snprintf(motivoDecision, sizeof(motivoDecision),
+             "Aula ocupada y T >= %.1f C: ventilador ON", T_VENTILADOR_ON_C);
+  } else if (tempC <= T_CALEFACTOR_ON_C) {
+    propuesta = ACCION_HEATING;
+    snprintf(motivoDecision, sizeof(motivoDecision),
+             "Aula ocupada y T <= %.1f C: calefactor ON", T_CALEFACTOR_ON_C);
+  } else if (accionActual == ACCION_COOLING && tempC <= T_APAGADO_C) {
+    propuesta = ACCION_STANDBY;
+    snprintf(motivoDecision, sizeof(motivoDecision),
+             "T <= %.1f C (setpoint alcanzado): ventilador OFF", T_APAGADO_C);
+  } else if (accionActual == ACCION_HEATING && tempC >= T_APAGADO_C) {
+    propuesta = ACCION_STANDBY;
+    snprintf(motivoDecision, sizeof(motivoDecision),
+             "T >= %.1f C (setpoint alcanzado): calefactor OFF", T_APAGADO_C);
+  } else if (accionActual == ACCION_DISABLED) {
+    // El aula se acaba de ocupar con T entre ambos umbrales: no hace falta
+    // enfriar ni calentar, pero el sistema debe salir de DISABLED.
+    propuesta = ACCION_STANDBY;
+    snprintf(motivoDecision, sizeof(motivoDecision),
+             "Aula ocupada y %.1f C < T < %.1f C: sin enfriar ni calentar",
+             T_CALEFACTOR_ON_C, T_VENTILADOR_ON_C);
+  } else {
+    propuesta = accionActual;
+    snprintf(motivoDecision, sizeof(motivoDecision),
+             "%.1f C < T < %.1f C: se mantiene el estado",
+             T_CALEFACTOR_ON_C, T_VENTILADOR_ON_C);
+  }
+
+  // Intervalo minimo simetrico: se exige cada vez que el ventilador o el
+  // calefactor se encienden o se apagan, y se cuenta desde el ultimo cambio de
+  // cualquiera de los dos. Asi COOLING -> HEATING y HEATING -> COOLING esperan
+  // lo mismo, y ningun actuador conmuta dos veces en menos de MIN_ON_MS.
+  // Los cambios que no tocan actuadores (p. ej. STANDBY <-> DISABLED) no esperan.
+  bool cambiaActuador =
+      ventiladorEncendido(propuesta) != ventiladorEncendido(accionActual) ||
+      calefactorActivo(propuesta) != calefactorActivo(accionActual);
+  if (propuesta != accionActual && cambiaActuador) {
+    unsigned long transcurrido = ahora - ultimoCambioMs;
+    if (huboCambioActuador && transcurrido < MIN_ON_MS) {
+      unsigned long faltan = (MIN_ON_MS - transcurrido + 999) / 1000;
+      // Dice en que estado sigue y a cual pasara, p. ej.
+      // "Histeresis: sigue en COOLING, pasa a HEATING en 58 s (minimo 60 s)"
+      snprintf(motivoDecision, sizeof(motivoDecision),
+               "Histeresis: sigue en %s, pasa a %s en %lu s (minimo %lu s)",
+               nombreAccion(accionActual), nombreAccion(propuesta), faltan, MIN_ON_MS / 1000);
+      bloqueoSegundos = faltan;
+      accionPendiente = propuesta;
+      return accionActual;
+    }
+    ultimoCambioMs = ahora;
+    huboCambioActuador = true;
+  }
+  return propuesta;
+}
+
+// --------------------------------- Red ---------------------------------------
+// Lee el valor de una clave de un JSON plano, sin librerias: "clave":"valor" o "clave":123.
+// Suficiente para los comandos del backend, que tienen un solo nivel.
+String valorJson(const String& json, const char* clave) {
+  String patron = String("\"") + clave + "\"";
+  int i = json.indexOf(patron);
+  if (i < 0) return "";
+  i = json.indexOf(':', i + patron.length());
+  if (i < 0) return "";
+  i++;
+  while (i < (int)json.length() && json[i] == ' ') i++;
+  if (i < (int)json.length() && json[i] == '"') {
+    int fin = json.indexOf('"', i + 1);
+    return fin < 0 ? "" : json.substring(i + 1, fin);
+  }
+  int fin = i;
+  while (fin < (int)json.length() && json[fin] != ',' && json[fin] != '}') fin++;
+  return json.substring(i, fin);
+}
+
+// Comando del dashboard (RF-26). Llega retenido: tras un reinicio el nodo recupera
+// el ultimo comando (RF-12) y vuelve a aplicar su duracion completa.
+void onMqttMessage(char* topic, byte* payload, unsigned int length) {
+  String msg;
+  for (unsigned int i = 0; i < length; i++) msg += (char)payload[i];
+  LOG("RED", "Comando recibido en %s: %s", topic, msg.c_str());
+
+  String modo = valorJson(msg, "modo");
+  if (modo == "auto" || msg.length() == 0) {
+    if (manualActivo) LOG("EVT", "Control manual desactivado: vuelve la heuristica");
+    manualActivo = false;
+    return;
+  }
+  if (modo != "manual") {
+    LOG("RED", "Comando ignorado: modo desconocido");
+    return;
+  }
+  String accion = valorJson(msg, "accion");
+  unsigned long duracion = (unsigned long)valorJson(msg, "duracion_s").toInt();
+  if (duracion == 0 || duracion > MANUAL_MAX_S) duracion = min(duracion == 0 ? 900UL : duracion, MANUAL_MAX_S);
+  if (accion == "COOLING") accionManual = ACCION_COOLING;
+  else if (accion == "HEATING") accionManual = ACCION_HEATING;
+  else if (accion == "STANDBY") accionManual = ACCION_STANDBY;
+  else { LOG("RED", "Comando ignorado: accion manual no soportada"); return; }
+  int nivel = valorJson(msg, "nivel").toInt();
+  nivelManual = (nivel >= 20 && nivel <= 100) ? nivel : 100;
+  manualActivo = true;
+  manualHastaMs = millis() + duracion * 1000UL;
+  LOG("EVT", "Control manual: %s durante %lu s", nombreAccion(accionManual), duracion);
+}
+
+void intentarWiFi() {
+  logInicio("RED");
+  Serial.printf("Conectando a la red WiFi \"%s\"", WIFI_SSID);
+  // Canal 6: evita que la conexion a Wokwi-GUEST se cuelgue autodetectandolo.
+  WiFi.begin(WIFI_SSID, WIFI_PASS, 6);
+  unsigned long inicio = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - inicio < WIFI_TIMEOUT_MS) {
+    delay(300);
+    Serial.print(".");
+  }
+  Serial.println();
+  wifiOk = (WiFi.status() == WL_CONNECTED);
+  if (wifiOk) {
+    LOG("RED", "WiFi conectado | IP %s | RSSI %d dBm",
+        WiFi.localIP().toString().c_str(), WiFi.RSSI());
+  } else {
+    LOG("RED", "Sin WiFi tras %lu s: el nodo opera en modo autonomo (control y alarma locales)",
+        WIFI_TIMEOUT_MS / 1000);
+  }
+}
+
+// Umbrales de control, retenidos: el dashboard los usa para clasificar las
+// lecturas y dibujar las lineas de referencia sin duplicar constantes.
+void publicarConfig() {
+  char buf[320];
+  snprintf(buf, sizeof(buf),
+    "{\"setpoint_c\":%.1f,\"t_ventilador_on_c\":%.1f,\"t_calefactor_on_c\":%.1f,"
+    "\"t_apagado_c\":%.1f,\"min_on_s\":%lu,\"hr_alta_pct\":%.0f,\"hr_baja_pct\":%.0f,"
+    "\"co_alarm_ppm\":%d,\"ocupacion_adc\":%d,\"periodo_s\":%.1f}",
+    SETPOINT_C, T_VENTILADOR_ON_C, T_CALEFACTOR_ON_C, T_APAGADO_C, MIN_ON_MS / 1000,
+    HR_ALTA_PCT, HR_BAJA_PCT, CO_ALARM_PPM, OCCUPANCY_ADC_THRESHOLD,
+    PERIODO_LECTURA_MS / 1000.0);
+  mqtt.publish(TOPIC_CONFIG, buf, true);
+}
+
+void intentarMQTT() {
+  if (!wifiOk) return;
+  if (mqtt.connected()) { mqttEstabaConectado = true; return; }
+  if (mqttEstabaConectado) {
+    // Codigos de PubSubClient: -4 timeout, -3 conexion perdida, -2 fallo de red
+    LOG("RED", "MQTT desconectado (rc=%d), reintento en %lu s",
+        mqtt.state(), MQTT_RETRY_MIN_MS / 1000);
+    mqttEstabaConectado = false;
+    mqttEsperaMs = MQTT_RETRY_MIN_MS;            // 5 s hasta el primer reintento...
+    mqttProximaEsperaMs = min(2 * MQTT_RETRY_MIN_MS, MQTT_RETRY_MAX_MS); // nunca supera el maximo
+    ultimoIntentoMqttMs = millis();
+  }
+  if (huboIntentoMqtt && millis() - ultimoIntentoMqttMs < mqttEsperaMs) return;
+  huboIntentoMqtt = true;
+  ultimoIntentoMqttMs = millis();
+
+  // LWT: si el nodo cae sin avisar, el broker publica "offline" retenido.
+  if (mqtt.connect(clientId.c_str(), MQTT_USER, MQTT_PASS, TOPIC_STATUS, 1, true, "offline")) {
+    mqttEstabaConectado = true;
+    mqttEsperaMs = mqttProximaEsperaMs = MQTT_RETRY_MIN_MS;
+    mqtt.publish(TOPIC_STATUS, "online", true);
+    mqtt.subscribe(TOPIC_CMD, 1);
+    publicarConfig();
+    LOG("RED", "MQTT conectado a %s:%d | cliente %s", MQTT_HOST, MQTT_PORT, clientId.c_str());
+    LOG("RED", "Publica en %s | suscrito a %s", TOPIC_TELEMETRY, TOPIC_CMD);
+  } else {
+    mqttEsperaMs = mqttProximaEsperaMs;                                     // con MAX = MIN: siempre 5 s
+    mqttProximaEsperaMs = min(mqttProximaEsperaMs * 2, MQTT_RETRY_MAX_MS);
+    LOG("RED", "Error de conexion MQTT (rc=%d), reintento en %lu s",
+        mqtt.state(), mqttEsperaMs / 1000);
+  }
+}
+
+void publicarTelemetria(bool dhtOk, float tempC, float humedad, int mq135, int mq7ppm) {
+  char temp[12], hum[12];
+  if (dhtOk) {
+    snprintf(temp, sizeof(temp), "%.1f", tempC);
+    snprintf(hum, sizeof(hum), "%.0f", humedad);
+  } else {
+    strcpy(temp, "null"); // sin dato de temperatura, el resto se reporta igual
+    strcpy(hum, "null");
+  }
+  // El motivo es texto libre: se escapan comillas y barras para no romper el JSON.
+  char motivo[160];
+  size_t j = 0;
+  for (size_t i = 0; motivoDecision[i] && j < sizeof(motivo) - 2; i++) {
+    char c = motivoDecision[i];
+    if (c == '"' || c == '\\') motivo[j++] = '\\';
+    motivo[j++] = c;
+  }
+  motivo[j] = '\0';
+
+  float co2ppm = CO2_PPM_MIN + mq135 * (CO2_PPM_MAX - CO2_PPM_MIN) / 4095.0;
+  medirRpmVentilador();
+  char buf[700]; // cabe en el buffer MQTT fijado con setBufferSize en setup()
+  snprintf(buf, sizeof(buf),
+    "{\"ciclo\":%lu,\"uptime_s\":%.1f,\"temp_c\":%s,\"humedad\":%s,\"co2_proxy\":%d,\"co2_ppm\":%.0f,"
+    "\"co_ppm\":%d,\"accion\":\"%s\",\"alarma_co\":%s,\"ventilador_pwm\":%d,\"ventilador_rpm\":%d,"
+    "\"calefactor\":%s,\"buzzer\":%s,\"led\":\"%s\",\"motivo\":\"%s\","
+    "\"bloqueo_s\":%lu,\"pendiente\":\"%s\",\"manual\":%s,\"manual_restante_s\":%lu,\"is_simulated\":%s}",
+    numeroCiclo, millis() / 1000.0, temp, hum, mq135, co2ppm, mq7ppm, nombreAccion(accionActual),
+    alarmaCO ? "true" : "false", dutyVentilador, rpmVentilador,
+    calefactorEncendido ? "true" : "false", buzzerEncendido ? "true" : "false",
+    colorLed, motivo, bloqueoSegundos, bloqueoSegundos ? nombreAccion(accionPendiente) : "",
+    manualActivo ? "true" : "false", manualActivo ? (manualHastaMs - millis() + 999) / 1000 : 0UL,
+    TELEMETRIA_SIMULADA ? "true" : "false");
+  if (!mqtt.publish(TOPIC_TELEMETRY, buf)) {
+    LOG("RED", "No se pudo publicar la telemetria");
+  }
+}
+
+// Imprime el estado completo de una lectura: la hora aparece una sola vez en la
+// cabecera y cada sensor y cada actuador ocupa su propia fila.
+void imprimirBloqueCiclo(bool dhtOk, float tempC, float humedad,
+                         int mq135, bool ocupado, int mq7ppm) {
+  char barra[13];
+  barraNivel(dutyVentilador * 100 / 255, barra);
+
+  Serial.printf("+-- CICLO %-3lu | t = %6.1f s ------------------------------\r\n",
+                numeroCiclo, millis() / 1000.0);
+  Serial.println("| SENSORES");
+  if (dhtOk) {
+    const float umbralCalido = SETPOINT_C + HYSTERESIS_C;
+    const float umbralFresco = SETPOINT_C - HYSTERESIS_C;
+    char clasificacionTemp[48];
+    if (tempC >= umbralCalido) {
+      snprintf(clasificacionTemp, sizeof(clasificacionTemp), "CALIDO (T >= %.1f C)", umbralCalido);
+    } else if (tempC <= umbralFresco) {
+      snprintf(clasificacionTemp, sizeof(clasificacionTemp), "FRESCO (T <= %.1f C)", umbralFresco);
+    } else {
+      snprintf(clasificacionTemp, sizeof(clasificacionTemp), "TEMPLADO (%.1f C < T < %.1f C)",
+               umbralFresco, umbralCalido);
+    }
+    char clasificacionHum[48];
+    if (humedad >= HR_ALTA_PCT) {
+      snprintf(clasificacionHum, sizeof(clasificacionHum), "HUMEDO (HR >= %.0f %%)", HR_ALTA_PCT);
+    } else if (humedad <= HR_BAJA_PCT) {
+      snprintf(clasificacionHum, sizeof(clasificacionHum), "SECO (HR <= %.0f %%)", HR_BAJA_PCT);
+    } else {
+      snprintf(clasificacionHum, sizeof(clasificacionHum), "MODERADO (%.0f %% < HR < %.0f %%)",
+               HR_BAJA_PCT, HR_ALTA_PCT);
+    }
+    char valorTemp[16], valorHum[16];
+    snprintf(valorTemp, sizeof(valorTemp), "T = %.1f C", tempC);
+    snprintf(valorHum, sizeof(valorHum), "HR = %.0f %%", humedad);
+    Serial.printf("|   %-11s%-13s %s\r\n", "DHT22", valorTemp, clasificacionTemp);
+    Serial.printf("|   %-11s%-13s %s\r\n", "", valorHum, clasificacionHum);
+  } else {
+    Serial.printf("|   %-11ssin lectura\r\n", "DHT22");
+  }
+  if (ocupado) {
+    Serial.printf("|   %-11sADC %4d/4095   AULA OCUPADA (ADC >= %d)\r\n", "MQ-135", mq135,
+                  OCCUPANCY_ADC_THRESHOLD);
+  } else {
+    Serial.printf("|   %-11sADC %4d/4095   AULA VACIA (ADC < %d)\r\n", "MQ-135", mq135,
+                  OCCUPANCY_ADC_THRESHOLD);
+  }
+  if (alarmaCO) {
+    Serial.printf("|   %-11sCO = %d ppm   ALARMA (CO >= %d ppm)\r\n", "MQ-7", mq7ppm,
+                  CO_ALARM_PPM);
+  } else {
+    Serial.printf("|   %-11sCO = %d ppm   NORMAL (CO < %d ppm)\r\n", "MQ-7", mq7ppm,
+                  CO_ALARM_PPM);
+  }
+  Serial.println("| DECISION");
+  if (alarmaCO) {
+    // Durante la alarma el control de clima esta suspendido: no se muestra el
+    // ultimo estado de la heuristica, porque no es quien manda al ventilador.
+    Serial.printf("|   %-11sALARMA DE CO - Control de clima suspendido\r\n", "Estado");
+  } else {
+    Serial.printf("|   %-11s%s - %s\r\n", "Estado", nombreAccion(accionActual),
+                  descripcionAccion(accionActual));
+  }
+  Serial.printf("|   %-11s%s\r\n", "Motivo", motivoDecision);
+  Serial.println("| ACTUADORES");
+  bool ledEncendido = ledRojoOn || ledVerdeOn || ledAzulOn;
+  Serial.printf("|   %-11s%-4s%s %3d %%   (LED amarillo)\r\n", "Ventilador",
+                dutyVentilador > 0 ? "ON" : "OFF", barra, dutyVentilador * 100 / 255);
+  Serial.printf("|   %-11s%-4s                     (LED naranja)\r\n", "Calefactor",
+                calefactorEncendido ? "ON" : "OFF");
+  Serial.printf("|   %-11s%s\r\n", "Buzzer", buzzerEncendido ? "ON" : "OFF");
+  Serial.printf("|   %-11s%-4s%s\r\n", "LED RGB", ledEncendido ? "ON" : "OFF", colorLed);
+  Serial.println("+------------------------------------------------");
+  Serial.println();
+}
+
+// --------------------------------- setup ---------------------------------------
+void setup() {
+  Serial.begin(115200);
+  delay(300);
+  imprimirEncabezado();
+
+  dht.begin();
+  pinMode(BUZZER_PIN, OUTPUT);
+  pinMode(LED_R_PIN, OUTPUT);
+  pinMode(LED_G_PIN, OUTPUT);
+  pinMode(LED_B_PIN, OUTPUT);
+  pinMode(HEATER_PIN, OUTPUT);
+  pinMode(FAN_TACH_PIN, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(FAN_TACH_PIN), alPulsoTacometro, FALLING);
+  escribirCalefactor(false);
+
+#if CCS_LEDC_API_NUEVA
+  ledcAttach(FAN_PWM_PIN, FAN_PWM_HZ, 8); // 25 kHz, 8 bits
+#else
+  ledcSetup(FAN_PWM_CHANNEL, FAN_PWM_HZ, 8);
+  ledcAttachPin(FAN_PWM_PIN, FAN_PWM_CHANNEL);
+#endif
+
+  // --- INA219 (opcional) ---
+  // Wire.begin();
+  // if (!ina219.begin()) LOG("SIS", "INA219 no detectado (revisar SDA/SCL)");
+
+  escribirBuzzer(false);
+  aplicarAccion(accionActual);
+  LOGF("SIS", "DHT22",      "sensor   | D4");
+  LOGF("SIS", "MQ-135",     "sensor   | D34 (ADC1)");
+  LOGF("SIS", "MQ-7",       "sensor   | D35 (ADC1)");
+  LOGF("SIS", "Ventilador", "actuador | D25 (PWM)");
+  LOGF("SIS", "Calefactor", "actuador | D32");
+  LOGF("SIS", "Buzzer",     "actuador | D26");
+  LOGF("SIS", "LED RGB",    "actuador | D13 (R), D14 (G), D27 (B)");
+  LOG("SIS", "Estado inicial: %s | LED=%s", nombreAccion(accionActual), colorLed);
+
+  espClient.setCACert(MQTT_ROOT_CA);
+  configTime(0, 0, "pool.ntp.org", "time.google.com"); // hora para validar el certificado
+  mqtt.setServer(MQTT_HOST, MQTT_PORT);
+  mqtt.setCallback(onMqttMessage);
+  // Por defecto PubSubClient espera hasta 15 s al broker y bloquea el loop
+  // (control y alarma). Con 3 s el fallo se reporta rapido.
+  mqtt.setSocketTimeout(3);
+  // El buffer por defecto de PubSubClient (256 B) no alcanza para la telemetria
+  // con el motivo de la decision: los publish mas largos fallarian en silencio.
+  mqtt.setBufferSize(768);
+  // RF-10: keepalive de 5 s. Si el nodo deja de responder, el broker publica el
+  // Last Will ("offline") tras 1.5 x keepalive, unos 7.5 s (< 10 s exigidos).
+  mqtt.setKeepAlive(5);
+  clientId = String(CLIENT_ID_BASE) + "-" + String((uint32_t)esp_random(), HEX);
+
+  intentarWiFi();
+  intentarMQTT();
+  Serial.println();
+}
+
+// ---------------------------------- loop ----------------------------------------
+void loop() {
+  if (wifiOk) {
+    intentarMQTT(); // no bloquea: respeta su propio temporizador de reintento
+    mqtt.loop();
+  }
+
+  if (millis() - ultimaLecturaMs < PERIODO_LECTURA_MS) return;
+  ultimaLecturaMs = millis();
+
+  // --- 1. Lectura de sensores ---
+  int mq135  = analogRead(MQ135_PIN);          // 0-4095, proxy de CO2/ocupacion
+  int mq7Raw = analogRead(MQ7_PIN);            // 0-4095
+  int mq7ppm = map(mq7Raw, 0, 4095, 0, 150);   // mapeo SIMPLIFICADO para simular;
+                                               // en hardware real usar la curva
+                                               // de calibracion del MQ-7
+  bool ocupado = mq135 >= OCCUPANCY_ADC_THRESHOLD;
+  float tempC   = dht.readTemperature();
+  float humedad = dht.readHumidity();
+  bool dhtOk = !isnan(tempC) && !isnan(humedad);
+
+  // --- 2. Seguridad: alarma de CO, evaluada antes que el control de clima ---
+  alarmaCO = (mq7ppm >= CO_ALARM_PPM);
+  if (alarmaCO && !alarmaCOPrevia) {
+    LOG("EVT", "ALARMA DE CO ACTIVADA: %d ppm >= %d ppm. Ventilador forzado al 100%%, calefactor OFF y buzzer ON",
+        mq7ppm, CO_ALARM_PPM);
+  } else if (!alarmaCO && alarmaCOPrevia) {
+    LOG("EVT", "Alarma de CO desactivada: %d ppm < %d ppm. Se reanuda el control por heuristica",
+        mq7ppm, CO_ALARM_PPM);
+  }
+  alarmaCOPrevia = alarmaCO;
+
+  // --- 3. Decision de clima ---
+  // Solo la heuristica bloquea; con alarma de CO o sin lectura del DHT no hay bloqueo.
+  bloqueoSegundos = 0;
+  if (manualActivo && (long)(millis() - manualHastaMs) >= 0) {
+    manualActivo = false;
+    LOG("EVT", "Control manual vencido: vuelve la heuristica");
+  }
+  if (alarmaCO) {
+    snprintf(motivoDecision, sizeof(motivoDecision),
+             "CO >= %d ppm: ventilador al 100 %%, calefactor OFF y buzzer ON", CO_ALARM_PPM);
+  } else if (manualActivo) {
+    // El control manual no espera la histeresis: es una orden explicita del usuario.
+    unsigned long restante = (manualHastaMs - millis() + 999) / 1000;
+    snprintf(motivoDecision, sizeof(motivoDecision),
+             "Control manual desde el dashboard: %s (quedan %lu s)",
+             accionManual == ACCION_COOLING ? (nivelManual < 100 ? "ventilador ON (potencia reducida)" : "ventilador ON")
+             : accionManual == ACCION_HEATING ? "calefactor ON" : "ventilador y calefactor OFF",
+             restante);
+    if (accionManual != accionActual) {
+      LOG("EVT", "Transicion de estado (manual): %s -> %s",
+          nombreAccion(accionActual), nombreAccion(accionManual));
+      accionActual = accionManual;
+      ultimoCambioMs = millis();
+      huboCambioActuador = true;
+    }
+  } else if (!dhtOk) {
+    snprintf(motivoDecision, sizeof(motivoDecision),
+             "Sin lectura del DHT22: se mantiene el ultimo estado");
+  } else {
+    float co2ppm = CO2_PPM_MIN + mq135 * (CO2_PPM_MAX - CO2_PPM_MIN) / 4095.0;
+    actualizarNivelReglas(tempC, co2ppm);
+    Accion nueva = decidirHeuristica(tempC, ocupado);
+    if (nueva != accionActual) {
+      LOG("EVT", "Transicion de estado: %s -> %s",
+          nombreAccion(accionActual), nombreAccion(nueva));
+      accionActual = nueva;
+    }
+    if (accionActual == ACCION_COOLING && bloqueoSegundos == 0) {
+      size_t n = strlen(motivoDecision);
+      snprintf(motivoDecision + n, sizeof(motivoDecision) - n, " (ventilador al %d %%)", nivelReglas);
+    }
+  }
+
+  // --- 4. Actuacion ---
+  escribirBuzzer(alarmaCO);
+  if (alarmaCO) {
+    escribirPWMVentilador(255); // caudal maximo, independiente de la heuristica
+    escribirCalefactor(false);  // nunca coincide con el ventilador
+    setLedEstado(accionActual);
+  } else {
+    aplicarAccion(accionActual);
+  }
+
+  // --- 5. Registro del ciclo ---
+  numeroCiclo++;
+  if (numeroCiclo % LOG_CADA_N_CICLOS == 0) {
+    imprimirBloqueCiclo(dhtOk, tempC, humedad, mq135, ocupado, mq7ppm);
+  }
+
+  // --- 6. Telemetria ---
+  if (mqtt.connected()) {
+    publicarTelemetria(dhtOk, tempC, humedad, mq135, mq7ppm);
+  }
+}

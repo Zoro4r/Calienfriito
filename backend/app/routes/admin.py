@@ -1,9 +1,12 @@
 import logging
 import math
+import re
+from pathlib import Path
 from datetime import datetime, time as dt_time, timezone, timedelta
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import PlainTextResponse
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -689,6 +692,31 @@ class NodeConfigOut(BaseModel):
     port: int
     user: str
     tls: bool
+
+
+# The node firmware, as a template: the room and broker are filled in here, and the WiFi and
+# broker password in the browser (they never reach the server). Room codes become MQTT topics.
+NODE_FIRMWARE = Path(__file__).resolve().parent.parent / "firmware" / "nodo.ino.tmpl"
+ROOM_CODE = re.compile(r"^[A-Za-z0-9_-]{1,20}$")
+
+
+@router.get(
+    "/node-firmware",
+    response_class=PlainTextResponse,
+    responses={401: {"model": ErrorDetail}, 403: {"model": ErrorDetail}, 409: {"model": ErrorDetail}, 422: {"model": ErrorDetail}},
+)
+def node_firmware(room: str = Query(..., description="Room code, used as AULA on the node"), current_user: User = Depends(get_current_user)):
+    """nodo.ino for one room, with its code and this server's broker. WiFi and broker password stay as placeholders."""
+    _require_admin(current_user)
+    if not ROOM_CODE.match(room):
+        raise HTTPException(status_code=422, detail="Room code must be 1-20 letters, digits, - or _.")
+    if not NODE_MQTT_HOST:
+        raise HTTPException(status_code=409, detail="This server has no public broker for nodes (NODE_MQTT_HOST).")
+    code = NODE_FIRMWARE.read_text(encoding="utf-8")
+    for token, value in (("__AULA__", room), ("__MQTT_HOST__", NODE_MQTT_HOST),
+                         ("__MQTT_PORT__", str(NODE_MQTT_PORT)), ("__MQTT_USER__", NODE_MQTT_USER)):
+        code = code.replace(token, value)
+    return code
 
 
 @router.get("/node-config", response_model=NodeConfigOut, responses={401: {"model": ErrorDetail}, 403: {"model": ErrorDetail}})
