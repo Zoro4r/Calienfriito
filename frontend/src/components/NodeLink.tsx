@@ -104,36 +104,28 @@ export function NodeSetup({ roomId }: { roomId: string }) {
   }
   const copy = () => navigator.clipboard.writeText(code).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500) }).catch(() => {})
 
+  const b = 'font-semibold text-white'
   return (
-    <ol className="flex list-decimal flex-col gap-4 pl-5 text-sm text-slate-300 marker:text-slate-500">
-      <li className="flex flex-col gap-2">
-        <span>Escribe tu WiFi y la clave del broker. Se ponen dentro del programa aquí, en tu navegador: no se envían ni se guardan.</span>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-          <label className="block"><span className="field-label">Red WiFi (2.4 GHz)</span>
-            <input className="field" value={ssid} onChange={e => setSsid(e.target.value)} placeholder="nombre de la red" autoComplete="off" /></label>
-          <label className="block"><span className="field-label">Clave del WiFi</span>
-            <input className="field" type="password" value={wifiPass} onChange={e => setWifiPass(e.target.value)} placeholder="vacía si es abierta" autoComplete="new-password" /></label>
-          <label className="block"><span className="field-label">Clave del broker</span>
-            <input className="field" type="password" value={mqttPass} onChange={e => setMqttPass(e.target.value)} placeholder="la del usuario nodo" autoComplete="new-password" /></label>
-        </div>
-      </li>
-      <li className="flex flex-col gap-2">
-        <span>Descarga el programa. Ya trae el aula <span className="font-mono">{roomId}</span>, el servidor y tu WiFi.</span>
-        <span className="flex flex-wrap items-center gap-2">
-          <button type="button" className="btn btn-secondary" onClick={download} disabled={!ready}><Download size={14} /> Descargar nodo.ino</button>
-          <button type="button" className="btn btn-ghost" onClick={copy} disabled={!ready}>{copied ? <><Check size={14} /> Copiado</> : <><Copy size={14} /> Copiar código</>}</button>
-          {!ready && <span className="text-xs text-slate-500">Completa la red WiFi y la clave del broker.</span>}
-        </span>
-      </li>
-      <li>
-        Ábrelo con el <b className="font-semibold text-white">Arduino IDE</b>; si pide crear la carpeta <span className="font-mono">nodo</span>, acepta.
-        La primera vez instala las librerías <b className="font-semibold text-white">DHT sensor library</b> (Adafruit) y <b className="font-semibold text-white">PubSubClient</b> en <i>Herramientas → Gestionar bibliotecas</i>.
-      </li>
-      <li>
-        Con los 12 V desenchufados y OUT+ del buck fuera del riel, conecta el ESP32 por USB. Elige la placa <b className="font-semibold text-white">ESP32 Dev Module</b> y su puerto, y pulsa <b className="font-semibold text-white">Subir</b>. Si se queda en "Connecting…", mantén presionado <b className="font-semibold text-white">BOOT</b>.
-      </li>
-      <li>Desconecta el USB, devuelve OUT+ al riel y enchufa los 12 V. El nodo se conecta a tu WiFi y luego al servidor.</li>
-    </ol>
+    <div className="flex flex-col gap-3 text-sm text-slate-300">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <label className="block"><span className="field-label">Red WiFi (2.4 GHz)</span>
+          <input className="field" value={ssid} onChange={e => setSsid(e.target.value)} placeholder="nombre de la red" autoComplete="off" /></label>
+        <label className="block"><span className="field-label">Clave del WiFi</span>
+          <input className="field" type="password" value={wifiPass} onChange={e => setWifiPass(e.target.value)} placeholder="vacía si es abierta" autoComplete="new-password" /></label>
+        <label className="block"><span className="field-label">Clave del broker</span>
+          <input className="field" type="password" value={mqttPass} onChange={e => setMqttPass(e.target.value)} placeholder="usuario nodo" autoComplete="new-password" /></label>
+      </div>
+      <span className="flex flex-wrap items-center gap-2">
+        <button type="button" className="btn btn-secondary" onClick={download} disabled={!ready}><Download size={14} /> Descargar nodo.ino</button>
+        <button type="button" className="btn btn-ghost" onClick={copy} disabled={!ready}>{copied ? <><Check size={14} /> Copiado</> : <><Copy size={14} /> Copiar</>}</button>
+        <span className="text-xs text-slate-500">Las claves solo se escriben en el archivo; no se envían.</span>
+      </span>
+      <ol className="list-decimal space-y-1 pl-5 marker:text-slate-500">
+        <li>Ábrelo en el <b className={b}>Arduino IDE</b>, placa <b className={b}>ESP32 Dev Module</b>. Librerías: DHT sensor library y PubSubClient.</li>
+        <li>Con los 12 V y OUT+ desconectados, conecta el USB y pulsa <b className={b}>Subir</b> (<b className={b}>BOOT</b> si se queda en "Connecting…").</li>
+        <li>Quita el USB, pon OUT+ en el riel y enchufa los 12 V.</li>
+      </ol>
+    </div>
   )
 }
 
@@ -160,10 +152,10 @@ export function NodeLinkStatus({ link, roomId, stored }: { link: NodeLink; roomI
       ) : (
         <p className="text-xs text-slate-500">
           {stored
-            ? `Todavía no llegan lecturas de ${sensorOf(roomId)}. Se actualiza sola.`
+            ? `Aún sin lecturas de ${sensorOf(roomId)}.`
             : online
-              ? 'El ESP32 ya se comunica. Sus lecturas se guardarán al crear el aula.'
-              : `Enciende el ESP32 con AULA "${roomId}". Esta ventana detecta cuando se conecta.`}
+              ? 'Sus lecturas se guardarán al crear el aula.'
+              : 'Se detecta solo al encenderse.'}
         </p>
       )}
     </div>

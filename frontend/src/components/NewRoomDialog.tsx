@@ -75,10 +75,7 @@ export default function NewRoomDialog({ onClose, onCreated }: { onClose: () => v
             <NodeLinkStatus link={link} roomId={roomId} stored={step === 'listo'} />
           </section>
           {step === 'nodo' && !link.online && (
-            <p className="text-xs text-slate-500">
-              <b className="font-semibold text-slate-400">Crear aula</b> se habilita cuando el ESP32 se conecta.
-              Si todavía no lo tienes listo, usa <b className="font-semibold text-slate-400">Crear sin nodo</b> y conéctalo después desde el aula.
-            </p>
+            <p className="text-xs text-slate-500">Crear aula se activa cuando el ESP32 se conecta; si aún no está listo, usa Crear sin nodo.</p>
           )}
           {step === 'listo' && (
             <p className="flex items-center gap-2 text-slate-300">
