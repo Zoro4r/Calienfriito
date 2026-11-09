@@ -76,3 +76,6 @@ docs/report/*.auxlock
 
 # PlatformIO (firmware del ESP32)
 .pio/
+
+# Usuarios del broker en la VM de GCP (credenciales: nunca en git)
+infra/gcp/passwd
