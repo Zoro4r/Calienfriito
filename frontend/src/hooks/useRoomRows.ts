@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import api, { getApiErrorDetail } from '../api/client'
 import type { StoredReading } from '../types'
 import { levelTemp, levelCO2, levelCO, type SensorLevel } from '../utils/sensorColors'
@@ -97,11 +97,14 @@ export function useRoomRows() {
   const [now, setNow] = useState(Date.now())
   const nodes = useNodes()
 
+  const [roomsVersion, setRoomsVersion] = useState(0)
+  const reloadRooms = useCallback(() => setRoomsVersion(v => v + 1), [])
+
   useEffect(() => {
     api.get<Room[]>('/admin/rooms')
       .then(r => setRooms(r.data ?? []))
       .catch(err => setError(getApiErrorDetail(err) ?? 'No se pudieron cargar las aulas.'))
-  }, [])
+  }, [roomsVersion])
 
   useEffect(() => {
     let cancelled = false
@@ -137,5 +140,5 @@ export function useRoomRows() {
   const lastAny = sensors.reduce<string | null>((acc, s) => (s.reading && (!acc || s.reading.timestamp > acc) ? s.reading.timestamp : acc), null)
   const anyFresh = rows.some(r => r.fresh)
 
-  return { rooms, rows, counts, loading, error, now, lastAny, anyFresh }
+  return { rooms, rows, counts, loading, error, now, lastAny, anyFresh, reloadRooms }
 }

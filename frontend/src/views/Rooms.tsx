@@ -1,13 +1,15 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { ArrowRight, RefreshCw } from 'lucide-react'
+import { ArrowRight, Plus, Plug, RefreshCw } from 'lucide-react'
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts'
 import api from '../api/client'
 import { useAuth } from '../context/AuthContext'
 import { levelTemp, levelHumedad, levelCO2, levelCO, type SensorLevel } from '../utils/sensorColors'
 import { compareRooms, locationLabel, shortName, type Room } from '../utils/rooms'
 import { RoomFilters, useRoomFilter } from '../components/RoomFilters'
-import { fmt, timeAgo, valueText, clockTime, type Tone } from '../components/ui'
+import { fmt, timeAgo, valueText, clockTime, Toast, useToast, type Tone } from '../components/ui'
+import RoomDialog from '../components/RoomDialog'
+import NodeConnectDialog from '../components/NodeConnectDialog'
 import { useRoomRows, stateOf, targetOf, shortDate, ORDER, type RoomRow, type Status } from '../hooks/useRoomRows'
 
 // "What is happening in each room?": the rooms on the left (as in Infraestructura) and,
@@ -101,7 +103,12 @@ function MetricChart({ label, unit, dec, metric, points, value, level, reference
 
 export default function Rooms() {
   const { user } = useAuth()
-  const { rooms, rows, loading, now } = useRoomRows()
+  const { rooms, rows, loading, now, reloadRooms } = useRoomRows()
+  const isAdmin = user?.role === 'admin'
+  const [creating, setCreating] = useState(false)
+  const [connecting, setConnecting] = useState<Room | null>(null)
+  const [pendingConnect, setPendingConnect] = useState<string | null>(null)
+  const { toast, notify, clear } = useToast()
   const [params, setParams] = useSearchParams()
   const filter = useRoomFilter(rooms)
   const [series, setSeries] = useState<SensorRecent[]>([])
@@ -143,6 +150,13 @@ export default function Rooms() {
       .catch(() => {})
   }, [user?.role, room, control])
 
+  // After creating a room, open "Conectar nodo" as soon as the reloaded list includes it.
+  useEffect(() => {
+    if (!pendingConnect) return
+    const created = rooms.find(r => r.id === pendingConnect)
+    if (created) { setConnecting(created); setPendingConnect(null) }
+  }, [pendingConnect, rooms])
+
   const nowDate = new Date(now)
   const tagOf = (r: Room) => {
     const row = rowOf[r.id]
@@ -170,9 +184,12 @@ export default function Rooms() {
 
   return (
     <div className="flex flex-col gap-4 lg:h-full lg:min-h-0">
-      <div className="shrink-0">
-        <h1 className="page-title">Aulas</h1>
-        <p className="mt-1 text-sm text-slate-400">Lo que mide cada aula ahora y en la última hora.</p>
+      <div className="flex shrink-0 flex-wrap items-end justify-between gap-3">
+        <div>
+          <h1 className="page-title">Aulas</h1>
+          <p className="mt-1 text-sm text-slate-400">Lo que mide cada aula ahora y en la última hora.</p>
+        </div>
+        {isAdmin && <button className="btn btn-primary" onClick={() => setCreating(true)}><Plus size={16} /> Nueva aula</button>}
       </div>
 
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 lg:grid-cols-[17rem_minmax(0,1fr)]">
@@ -210,7 +227,10 @@ export default function Rooms() {
                 <h2 className="text-xl font-semibold text-white">{room.id} <span className="text-sm font-normal text-slate-400">{shortName(room)}</span></h2>
                 <p className="mt-0.5 text-sm text-slate-400">{locationLabel(room)} · {room.max_capacity} personas</p>
               </div>
-              <Link to={`/room/${room.id}`} className="btn btn-secondary ml-auto">Abrir aula <ArrowRight size={14} /></Link>
+              <div className="ml-auto flex items-center gap-2">
+                {isAdmin && <button className="btn btn-ghost" onClick={() => setConnecting(room)}><Plug size={14} /> Conectar nodo</button>}
+                <Link to={`/room/${room.id}`} className="btn btn-secondary">Abrir aula <ArrowRight size={14} /></Link>
+              </div>
             </header>
 
             <div className="flex shrink-0 flex-wrap items-center gap-x-6 gap-y-2 border-b border-slate-800 px-5 py-3 text-sm">
@@ -236,6 +256,16 @@ export default function Rooms() {
           </>}
         </section>
       </div>
+
+      {creating && (
+        <RoomDialog
+          original={null}
+          onClose={() => setCreating(false)}
+          onSaved={(msg, id) => { setCreating(false); notify('ok', `${msg} Ahora conecta su nodo.`); select(id); setPendingConnect(id); reloadRooms() }}
+        />
+      )}
+      {connecting && <NodeConnectDialog room={connecting} onClose={() => setConnecting(null)} />}
+      <Toast toast={toast} onClose={clear} />
     </div>
   )
 }
