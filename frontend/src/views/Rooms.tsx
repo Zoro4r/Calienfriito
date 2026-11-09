@@ -8,7 +8,7 @@ import { levelTemp, levelHumedad, levelCO2, levelCO, type SensorLevel } from '..
 import { compareRooms, locationLabel, shortName, type Room } from '../utils/rooms'
 import { RoomFilters, useRoomFilter } from '../components/RoomFilters'
 import { fmt, timeAgo, valueText, clockTime, Toast, useToast, type Tone } from '../components/ui'
-import RoomDialog from '../components/RoomDialog'
+import NewRoomDialog from '../components/NewRoomDialog'
 import NodeConnectDialog from '../components/NodeConnectDialog'
 import { useRoomRows, stateOf, targetOf, shortDate, ORDER, type RoomRow, type Status } from '../hooks/useRoomRows'
 
@@ -107,7 +107,6 @@ export default function Rooms() {
   const isAdmin = user?.role === 'admin'
   const [creating, setCreating] = useState(false)
   const [connecting, setConnecting] = useState<Room | null>(null)
-  const [pendingConnect, setPendingConnect] = useState<string | null>(null)
   const { toast, notify, clear } = useToast()
   const [params, setParams] = useSearchParams()
   const filter = useRoomFilter(rooms)
@@ -149,13 +148,6 @@ export default function Rooms() {
       .then(r => setControl(c => ({ ...c, [room.id]: r.data.mode === 'learning' ? 'Aprendizaje automático' : 'Reglas del nodo' })))
       .catch(() => {})
   }, [user?.role, room, control])
-
-  // After creating a room, open "Conectar nodo" as soon as the reloaded list includes it.
-  useEffect(() => {
-    if (!pendingConnect) return
-    const created = rooms.find(r => r.id === pendingConnect)
-    if (created) { setConnecting(created); setPendingConnect(null) }
-  }, [pendingConnect, rooms])
 
   const nowDate = new Date(now)
   const tagOf = (r: Room) => {
@@ -258,10 +250,9 @@ export default function Rooms() {
       </div>
 
       {creating && (
-        <RoomDialog
-          original={null}
+        <NewRoomDialog
           onClose={() => setCreating(false)}
-          onSaved={(msg, id) => { setCreating(false); notify('ok', `${msg} Ahora conecta su nodo.`); select(id); setPendingConnect(id); reloadRooms() }}
+          onCreated={id => { notify('ok', `Aula ${id} creada.`); select(id); reloadRooms() }}
         />
       )}
       {connecting && <NodeConnectDialog room={connecting} onClose={() => setConnecting(null)} />}
