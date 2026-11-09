@@ -31,6 +31,12 @@ def test_keeps_node_decision_in_node_state():
     assert "temp_c" not in r.node_state  # sensor values are not duplicated
 
 
+def test_keeps_node_occupancy_threshold():
+    msg = {"temp_c": 27.9, "humedad": 74, "co2_proxy": 219, "umbral_ocupacion": 260}
+    r = telemetry_to_reading("ccs/B101/telemetry", json.dumps(msg))
+    assert r.node_state["umbral_ocupacion"] == 260
+
+
 def test_skips_reading_without_dht():
     data = {**TELEMETRY, "temp_c": None, "humedad": None}
     assert telemetry_to_reading("ccs/A403/telemetry", json.dumps(data)) is None

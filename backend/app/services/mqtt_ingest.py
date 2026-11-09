@@ -33,7 +33,7 @@ RETRY_SECONDS = 5
 # Node decision fields copied verbatim into node_state.
 NODE_STATE_FIELDS = (
     "accion", "motivo", "alarma_co", "ventilador_pwm", "ventilador_rpm", "calefactor", "buzzer", "led",
-    "bloqueo_s", "pendiente", "ciclo", "uptime_s", "co2_proxy", "manual", "manual_restante_s",
+    "bloqueo_s", "pendiente", "ciclo", "uptime_s", "co2_proxy", "manual", "manual_restante_s", "umbral_ocupacion",
 )
 
 # Node connectivity (RF-10), from ccs/<room>/status: "online" on connect and the
@@ -68,6 +68,17 @@ async def publish_command(room_id: str, payload: dict) -> None:
 
     async with aiomqtt.Client(MQTT_HOST, MQTT_PORT, identifier=f"ccs-cmd-{uuid.uuid4().hex[:8]}") as client:
         await client.publish(f"ccs/{room_id}/command", json.dumps(payload), qos=1, retain=True)
+
+
+async def publish_settings(room_id: str, payload: dict) -> None:
+    """Publish the node's retained settings to ccs/<room>/settings (e.g. its occupancy threshold).
+
+    Retained, so a node that is offline gets them when it reconnects; it also keeps them in flash.
+    """
+    import aiomqtt
+
+    async with aiomqtt.Client(MQTT_HOST, MQTT_PORT, identifier=f"ccs-set-{uuid.uuid4().hex[:8]}") as client:
+        await client.publish(f"ccs/{room_id}/settings", json.dumps(payload), qos=1, retain=True)
 
 
 def telemetry_to_reading(topic: str, payload: bytes | str) -> SensorReading | None:

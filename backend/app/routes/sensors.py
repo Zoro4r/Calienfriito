@@ -865,6 +865,34 @@ async def room_controller(
     return {"room_id": room_id, **ctl, "last_order": last}
 
 
+class NodeSettingsIn(BaseModel):
+    umbral_ocupacion: int   # MQ-135 ADC (0-4095) from which the node considers the room occupied
+
+
+@router.put("/rooms/{room_id}/node-settings", responses={403: {"model": ErrorDetail}, 422: {"model": ErrorDetail}, 503: {"model": ErrorDetail}})
+async def set_node_settings(room_id: str, payload: NodeSettingsIn, current_user: User = Depends(get_current_user)):
+    """Change a node's occupancy threshold without reflashing it (admins only).
+
+    Published retained to ccs/<room>/settings; the node applies it, stores it in flash and reports
+    it back as `umbral_ocupacion` in its telemetry, which is how the dashboard confirms it.
+    """
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Only admins can change node settings.")
+    if not 1 <= payload.umbral_ocupacion <= 4095:
+        raise HTTPException(status_code=422, detail="umbral_ocupacion must be between 1 and 4095.")
+    from app.config import MQTT_ENABLED
+    from app.services.mqtt_ingest import publish_settings
+    if not MQTT_ENABLED:
+        raise HTTPException(status_code=503, detail="MQTT is disabled on this server.")
+    try:
+        await publish_settings(room_id, {"umbral_ocupacion": payload.umbral_ocupacion})
+    except Exception as exc:  # broker down or unreachable
+        logger.error("Could not publish settings for %s: %s", room_id, exc)
+        raise HTTPException(status_code=503, detail="MQTT broker unavailable.") from exc
+    logger.info("Node settings for %s set by '%s': umbral_ocupacion=%d", room_id, current_user.username, payload.umbral_ocupacion)
+    return {"room_id": room_id, "umbral_ocupacion": payload.umbral_ocupacion}
+
+
 @router.put("/rooms/{room_id}/controller", responses={403: {"model": ErrorDetail}, 503: {"model": ErrorDetail}})
 async def set_room_controller(
     room_id: str,

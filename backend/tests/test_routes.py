@@ -136,6 +136,32 @@ def test_collaborator_cannot_download_node_firmware(as_role):
     assert client.get("/api/v1/admin/node-firmware", params={"room": "B101"}).status_code == 403
 
 
+def test_collaborator_cannot_change_node_settings(as_role):
+    as_role("collaborator")
+    res = client.put("/api/v1/sensors/rooms/B101/node-settings", json={"umbral_ocupacion": 260})
+    assert res.status_code == 403
+
+
+@pytest.mark.parametrize("value", [0, 4096, -5])
+def test_node_settings_reject_out_of_range(as_role, value):
+    as_role("admin")
+    res = client.put("/api/v1/sensors/rooms/B101/node-settings", json={"umbral_ocupacion": value})
+    assert res.status_code == 422
+
+
+def test_admin_publishes_node_settings(as_role, monkeypatch):
+    sent = []
+
+    async def fake_publish(room_id, payload):
+        sent.append((room_id, payload))
+    monkeypatch.setattr("app.config.MQTT_ENABLED", True)
+    monkeypatch.setattr("app.services.mqtt_ingest.publish_settings", fake_publish)
+    as_role("admin")
+    res = client.put("/api/v1/sensors/rooms/B101/node-settings", json={"umbral_ocupacion": 260})
+    assert res.status_code == 200
+    assert sent == [("B101", {"umbral_ocupacion": 260})]
+
+
 def test_sensor_ingest_rejects_wrong_api_key(monkeypatch):
     monkeypatch.setattr(deps, "WATSON_EXTENSION_KEY", "expected-key")
     res = client.post("/api/v1/sensors/", json={}, headers={"X-API-Key": "wrong"})
