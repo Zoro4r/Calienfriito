@@ -4,7 +4,7 @@ import { RefreshCw } from 'lucide-react'
 import { getApiErrorDetail } from '../api/client'
 import type { Room } from '../utils/rooms'
 import { Dialog } from './ui'
-import { NodeConfigLines, NodeLinkStatus, ensureNodeSensor, sensorOf, useNodeLink } from './NodeLink'
+import { NodeSetup, NodeLinkStatus, ensureNodeSensor, sensorOf, useNodeLink } from './NodeLink'
 
 // Links a physical ESP32 to an existing room: registers and activates its sensor s-<room>,
 // gives the lines to paste into nodo.ino and shows when the node starts reporting.
@@ -42,7 +42,7 @@ export default function NodeConnectDialog({ room, onClose }: { room: Room; onClo
         </section>
         <section className="flex flex-col gap-2">
           <h3 className="font-semibold text-white">2. Configura el ESP32</h3>
-          <NodeConfigLines roomId={room.id} />
+          <NodeSetup roomId={room.id} />
         </section>
         <section className="flex flex-col gap-2">
           <h3 className="font-semibold text-white">3. Estado del nodo</h3>

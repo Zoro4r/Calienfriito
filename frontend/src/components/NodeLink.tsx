@@ -1,14 +1,13 @@
 import { useEffect, useState } from 'react'
-import { Check, Copy, RefreshCw } from 'lucide-react'
+import { Check, Copy, Download, RefreshCw } from 'lucide-react'
 import api from '../api/client'
 import type { StoredReading } from '../types'
 import { clockTime, fmt, parseUtc, timeAgo } from './ui'
 import type { NodeStatus } from '../hooks/useNodes'
 
-// Pieces shared by "Nueva aula" and "Conectar nodo": the lines to paste into nodo.ino,
+// Pieces shared by "Nueva aula" and "Conectar nodo": the node program ready to upload,
 // the live link to the ESP32 and the registration of its sensor s-<room>.
 
-interface NodeConfig { host: string | null; port: number; user: string; tls: boolean }
 interface Device { sensor_id: string; room_id: string | null; is_active: boolean; control_enabled: boolean }
 interface SensorLatest { sensor_id: string; room_id: string | null; reading: StoredReading | null }
 
@@ -67,37 +66,74 @@ export async function ensureNodeSensor(roomId: string) {
   }
 }
 
-/** The nodo.ino lines for this room, with a copy button. */
-export function NodeConfigLines({ roomId }: { roomId: string }) {
-  const [config, setConfig] = useState<NodeConfig | null | undefined>(undefined)
+// Escapes a value for a C string literal in the sketch.
+const cString = (s: string) => s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+
+/**
+ * The node program, ready to upload: the server fills in the room and broker; the WiFi and the
+ * broker password are typed here and written into the file in the browser (never sent or stored).
+ */
+export function NodeSetup({ roomId }: { roomId: string }) {
+  const [template, setTemplate] = useState<string | null | undefined>(undefined)
+  const [ssid, setSsid] = useState('')
+  const [wifiPass, setWifiPass] = useState('')
+  const [mqttPass, setMqttPass] = useState('')
   const [copied, setCopied] = useState(false)
-  useEffect(() => { api.get<NodeConfig>('/admin/node-config').then(r => setConfig(r.data)).catch(() => setConfig(null)) }, [])
 
-  if (config === undefined) return <p className="text-sm text-slate-400">Cargando los datos del servidor…</p>
-  if (!config?.host) return <p className="text-sm text-slate-400">Este servidor no tiene un broker público para nodos (falta NODE_MQTT_HOST en su configuración).</p>
+  useEffect(() => {
+    setTemplate(undefined)
+    api.get<string>('/admin/node-firmware', { params: { room: roomId }, responseType: 'text', transformResponse: r => r })
+      .then(r => setTemplate(r.data)).catch(() => setTemplate(null))
+  }, [roomId])
 
-  const lines = [
-    `#define AULA "${roomId}"`,
-    `const char* MQTT_HOST = "${config.host}";`,
-    `const int   MQTT_PORT = ${config.port};`,
-    `const char* MQTT_USER = "${config.user}";`,
-  ].join('\n')
-  const copy = () => navigator.clipboard.writeText(lines).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500) }).catch(() => {})
+  if (template === undefined) return <p className="text-sm text-slate-400">Preparando el programa del nodo…</p>
+  if (template === null) return <p className="text-sm text-slate-400">Este servidor no tiene un broker público para nodos (falta NODE_MQTT_HOST en su configuración).</p>
+
+  const ready = ssid.trim() !== '' && mqttPass !== ''
+  const code = template
+    // Function replacers: a "$" in a password must not be read as a replacement pattern.
+    .replace('__WIFI_SSID__', () => cString(ssid.trim()))
+    .replace('__WIFI_PASS__', () => cString(wifiPass))
+    .replace('__MQTT_PASS__', () => cString(mqttPass))
+
+  function download() {
+    const url = URL.createObjectURL(new Blob([code], { type: 'text/plain' }))
+    const a = Object.assign(document.createElement('a'), { href: url, download: 'nodo.ino' })
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+  const copy = () => navigator.clipboard.writeText(code).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500) }).catch(() => {})
 
   return (
-    <div className="flex flex-col gap-2 text-sm">
-      <p className="text-slate-400">En <span className="font-mono">nodo.ino</span>, reemplaza estas líneas:</p>
-      <div className="surface-inset relative">
-        <pre className="overflow-x-auto px-4 py-3 pr-24 font-mono text-xs leading-relaxed text-slate-200">{lines}</pre>
-        <button type="button" className="btn btn-secondary absolute right-2 top-2 px-2 py-1 text-xs" onClick={copy}>
-          {copied ? <><Check size={12} /> Copiado</> : <><Copy size={12} /> Copiar</>}
-        </button>
-      </div>
-      <p className="text-xs text-slate-500">
-        A mano: <span className="font-mono">WIFI_SSID</span> y <span className="font-mono">WIFI_PASS</span> (red de 2.4 GHz con internet) y <span className="font-mono">MQTT_PASS</span>, la clave del broker. La clave no se muestra aquí.
-        Sube el programa por USB, desconéctalo y enchufa el nodo a sus 12 V.
-      </p>
-    </div>
+    <ol className="flex list-decimal flex-col gap-4 pl-5 text-sm text-slate-300 marker:text-slate-500">
+      <li className="flex flex-col gap-2">
+        <span>Escribe tu WiFi y la clave del broker. Se ponen dentro del programa aquí, en tu navegador: no se envían ni se guardan.</span>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <label className="block"><span className="field-label">Red WiFi (2.4 GHz)</span>
+            <input className="field" value={ssid} onChange={e => setSsid(e.target.value)} placeholder="nombre de la red" autoComplete="off" /></label>
+          <label className="block"><span className="field-label">Clave del WiFi</span>
+            <input className="field" type="password" value={wifiPass} onChange={e => setWifiPass(e.target.value)} placeholder="vacía si es abierta" autoComplete="new-password" /></label>
+          <label className="block"><span className="field-label">Clave del broker</span>
+            <input className="field" type="password" value={mqttPass} onChange={e => setMqttPass(e.target.value)} placeholder="la del usuario nodo" autoComplete="new-password" /></label>
+        </div>
+      </li>
+      <li className="flex flex-col gap-2">
+        <span>Descarga el programa. Ya trae el aula <span className="font-mono">{roomId}</span>, el servidor y tu WiFi.</span>
+        <span className="flex flex-wrap items-center gap-2">
+          <button type="button" className="btn btn-secondary" onClick={download} disabled={!ready}><Download size={14} /> Descargar nodo.ino</button>
+          <button type="button" className="btn btn-ghost" onClick={copy} disabled={!ready}>{copied ? <><Check size={14} /> Copiado</> : <><Copy size={14} /> Copiar código</>}</button>
+          {!ready && <span className="text-xs text-slate-500">Completa la red WiFi y la clave del broker.</span>}
+        </span>
+      </li>
+      <li>
+        Ábrelo con el <b className="font-semibold text-white">Arduino IDE</b>; si pide crear la carpeta <span className="font-mono">nodo</span>, acepta.
+        La primera vez instala las librerías <b className="font-semibold text-white">DHT sensor library</b> (Adafruit) y <b className="font-semibold text-white">PubSubClient</b> en <i>Herramientas → Gestionar bibliotecas</i>.
+      </li>
+      <li>
+        Con los 12 V desenchufados y OUT+ del buck fuera del riel, conecta el ESP32 por USB. Elige la placa <b className="font-semibold text-white">ESP32 Dev Module</b> y su puerto, y pulsa <b className="font-semibold text-white">Subir</b>. Si se queda en "Connecting…", mantén presionado <b className="font-semibold text-white">BOOT</b>.
+      </li>
+      <li>Desconecta el USB, devuelve OUT+ al riel y enchufa los 12 V. El nodo se conecta a tu WiFi y luego al servidor.</li>
+    </ol>
   )
 }
 

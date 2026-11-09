@@ -125,14 +125,14 @@ export function Dialog({ title, onClose, children, footer, size = 'md' }: {
         role="dialog"
         aria-modal="true"
         onMouseDown={e => e.stopPropagation()}
-        className={`surface w-full rounded-xl shadow-2xl ${size === 'sm' ? 'max-w-sm' : size === 'lg' ? 'max-w-3xl' : size === 'xl' ? 'max-w-6xl' : 'max-w-lg'}`}
+        className={`surface flex max-h-[calc(100vh-2rem)] w-full flex-col rounded-xl shadow-2xl ${size === 'sm' ? 'max-w-sm' : size === 'lg' ? 'max-w-3xl' : size === 'xl' ? 'max-w-6xl' : 'max-w-lg'}`}
       >
-        <header className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
+        <header className="flex shrink-0 items-center justify-between border-b border-slate-800 px-4 py-3">
           <h2 className="section-title">{title}</h2>
           <button onClick={onClose} className="btn btn-ghost -mr-2 px-2 py-1" aria-label="Cerrar"><X size={16} /></button>
         </header>
-        <div className="p-4">{children}</div>
-        {footer && <footer className="flex items-center gap-2 border-t border-slate-800 px-4 py-3">{footer}</footer>}
+        <div className="min-h-0 overflow-y-auto p-4">{children}</div>
+        {footer && <footer className="flex shrink-0 items-center gap-2 border-t border-slate-800 px-4 py-3">{footer}</footer>}
       </div>
     </div>
   )

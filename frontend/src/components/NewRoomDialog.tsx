@@ -4,7 +4,7 @@ import { ArrowLeft, ArrowRight, RefreshCw } from 'lucide-react'
 import api from '../api/client'
 import { Dialog } from './ui'
 import { RoomFields, RoomNotices, friendly, useRoomForm } from './RoomDialog'
-import { NodeConfigLines, NodeLinkStatus, ensureNodeSensor, sensorOf, useNodeLink } from './NodeLink'
+import { NodeSetup, NodeLinkStatus, ensureNodeSensor, sensorOf, useNodeLink } from './NodeLink'
 
 // "Nueva aula" in Aulas: the room's data, then its ESP32. The node is detected live as soon
 // as it connects with this room code, so the room is created knowing its node works.
@@ -67,7 +67,7 @@ export default function NewRoomDialog({ onClose, onCreated }: { onClose: () => v
           {step === 'nodo' && (
             <section className="flex flex-col gap-2">
               <h3 className="font-semibold text-white">Configura el ESP32</h3>
-              <NodeConfigLines roomId={roomId} />
+              <NodeSetup roomId={roomId} />
             </section>
           )}
           <section className="flex flex-col gap-2">
