@@ -145,7 +145,7 @@ export default function Summary() {
       <div className="grid shrink-0 grid-cols-2 gap-3 xl:grid-cols-4">
         <Stat label="En alerta" value={counts.alert ?? 0} sub={(counts.alert ?? 0) === 1 ? 'aula' : 'aulas'} dot="bg-red-400" to="/aulas?estado=alert" />
         <Stat label="En atención" value={counts.warn ?? 0} sub={(counts.warn ?? 0) === 1 ? 'aula' : 'aulas'} dot="bg-amber-400" to="/aulas?estado=warn" />
-        <Stat label="En clase ahora" value={blocks ? inClassNow : '—'} sub={`de ${rooms.length}`} dot="bg-sky-400" to="/horarios" />
+        <Stat label="En clase ahora" value={blocks ? inClassNow : '—'} sub={`de ${rooms.length}`} dot="bg-sky-400" to="/aulas?vista=horarios" />
         <Stat label="Reportando ahora" value={fresh} sub={`de ${rooms.length}`} dot={fresh === rooms.length ? 'bg-emerald-400' : 'bg-slate-500'} to={fresh < rooms.length ? '/aulas?estado=nodata' : '/aulas'} />
       </div>
 

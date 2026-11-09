@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom'
 import {
-  LayoutDashboard, CalendarDays, FlaskConical, DoorOpen,
+  LayoutDashboard, FlaskConical, DoorOpen,
   Users, LogOut, TrendingUp,
   AlertTriangle, X, ShieldAlert, Menu, Clock, ChevronDown,
 } from 'lucide-react'
@@ -23,7 +23,6 @@ const NAV: { group: string; items: NavItem[] }[] = [
   { group: 'Monitoreo', items: [
     { to: '/',             label: 'Resumen',         icon: <LayoutDashboard size={18} /> },
     { to: '/aulas',        label: 'Aulas',           icon: <DoorOpen size={18} /> },
-    { to: '/horarios',     label: 'Horarios',        icon: <CalendarDays size={18} /> },
   ] },
   { group: 'Gestión', items: [
     { to: '/roi',          label: 'Rentabilidad',    icon: <TrendingUp size={18} />,   roles: ['admin'] },

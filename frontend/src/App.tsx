@@ -6,7 +6,6 @@ import Layout from './components/Layout'
 import Login from './components/Login'
 import Summary from './views/Summary'
 import Rooms from './views/Rooms'
-import Reservations from './views/Reservations'
 import UserManagement from './views/UserManagement'
 import Register from './views/Register'
 
@@ -66,8 +65,8 @@ export default function App() {
           <Route path="room/:id"     element={<RoomDetail />} />
           <Route path="sensors" element={<Navigate to="/aulas?vista=infraestructura" replace />} />
           {/* Read-only timetable: every role may see it. The old path still works. */}
-          <Route path="horarios" element={<Reservations />} />
-          <Route path="reservations" element={<Navigate to="/horarios" replace />} />
+          <Route path="horarios" element={<Navigate to="/aulas?vista=horarios" replace />} />
+          <Route path="reservations" element={<Navigate to="/aulas?vista=horarios" replace />} />
           <Route
             path="admin/users"
             element={

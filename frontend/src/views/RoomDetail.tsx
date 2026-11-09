@@ -416,7 +416,7 @@ export default function RoomDetail({ roomId, embeddedTab }: { roomId?: string; e
         {/* Where expected occupancy comes from: weekly classes + one-off reservations */}
         {!hasNode && <Card
           title="Horario de clases"
-          aside={<Link to="/horarios" className="text-blue-300 hover:underline">Ver horarios</Link>}
+          aside={<Link to={`/aulas?aula=${encodeURIComponent(id ?? '')}&vista=horarios`} className="text-blue-300 hover:underline">Ver horarios</Link>}
         >
           <p className="mb-3 text-xs text-slate-400">
             {hasNode
