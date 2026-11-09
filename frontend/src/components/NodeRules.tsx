@@ -60,50 +60,45 @@ function OccupancyThreshold({ roomId, sensorId }: { roomId: string; sensorId?: s
   }
 
   return (
-    <section className="surface flex flex-col gap-3 px-6 py-4">
-      <div>
-        <h3 className="text-base font-semibold text-white">Umbral de ocupación</h3>
-        <p className="mt-1 text-sm text-slate-400">
-          El nodo considera el aula ocupada cuando el MQ-135 llega a este valor.
-          {CAN_SET_THRESHOLD ? ' Elige uno entre lo que marca vacía y lo que marca con gente (o soplándole).' : ' Por ahora se cambia en el programa del ESP32; ajustarlo desde aquí llega con su próxima versión.'}
-        </p>
-      </div>
-      <div className="flex flex-wrap items-end gap-x-8 gap-y-3 text-sm">
-        <span className="flex flex-col"><span className="text-xs text-slate-500">Umbral actual</span><span className="text-xl font-semibold text-white">{current ?? '—'}</span></span>
-        <span className="flex flex-col"><span className="text-xs text-slate-500">MQ-135 ahora</span>
-          <span className="flex items-center gap-2 text-xl font-semibold text-white">{adc ?? '—'}
-            {adc != null && current != null && <span className="flex items-center gap-1.5 text-xs font-normal text-slate-400"><span className={`h-1.5 w-1.5 rounded-full ${adc >= current ? 'bg-emerald-400' : 'bg-slate-500'}`} />{adc >= current ? 'ocupada' : 'vacía'}</span>}
-          </span>
+    <section className="surface flex flex-col">
+      <header className="border-b border-slate-800 px-5 py-3">
+        <h3 className="text-sm font-semibold text-white">Umbral de ocupación</h3>
+      </header>
+      <div className="flex flex-wrap items-center gap-x-8 gap-y-3 px-5 py-3.5 text-sm">
+        <span className="min-w-0 flex-1 text-slate-400">
+          Desde este valor del MQ-135 el aula cuenta como ocupada.
+          {CAN_SET_THRESHOLD ? '' : ' Por ahora se cambia en el programa del ESP32.'}
+        </span>
+        <span className="flex items-baseline gap-2"><span className="text-xs text-slate-500">Umbral</span><span className="text-xl font-semibold text-white">{current ?? '—'}</span></span>
+        <span className="flex items-baseline gap-2"><span className="text-xs text-slate-500">Ahora</span><span className="text-xl font-semibold text-white">{adc ?? '—'}</span>
+          {adc != null && current != null && <span className="flex items-center gap-1.5 text-xs text-slate-400"><span className={`h-1.5 w-1.5 rounded-full ${adc >= current ? 'bg-emerald-400' : 'bg-slate-500'}`} />{adc >= current ? 'ocupada' : 'vacía'}</span>}
         </span>
         {canEdit && reported && (
-          <form className="ml-auto flex items-end gap-2" onSubmit={e => { e.preventDefault(); save() }}>
-            <label className="block">
-              <span className="field-label">Nuevo umbral (1–4095)</span>
-              <input className={`field w-36 ${NUM_INPUT_MODS}`} type="number" min={1} max={4095} value={value} onChange={e => setValue(e.target.value)} placeholder={String(current)} />
-            </label>
+          <form className="flex items-center gap-2" onSubmit={e => { e.preventDefault(); save() }}>
+            <input className={`field w-28 ${NUM_INPUT_MODS}`} type="number" min={1} max={4095} value={value} onChange={e => setValue(e.target.value)} placeholder={String(current)} aria-label="Nuevo umbral (1 a 4095)" />
             <button type="submit" className="btn btn-primary" disabled={busy || !valid}>{busy && <RefreshCw size={14} className="animate-spin" />} Aplicar</button>
           </form>
         )}
       </div>
       {sent != null && (
-        <p className="flex items-center gap-2 text-xs text-slate-400">
+        <p className="flex items-center gap-2 border-t border-slate-800 px-5 py-2.5 text-xs text-slate-400">
           <span className={`h-1.5 w-1.5 rounded-full ${applied ? 'bg-emerald-400' : 'bg-slate-500'}`} />
           {applied ? `El nodo ya usa ${sent}.` : `Enviado ${sent}: esperando que el nodo lo confirme…`}
         </p>
       )}
       {CAN_SET_THRESHOLD && reading && !reported && (
-        <p className="text-xs text-slate-500">El programa de este ESP32 es anterior y no permite ajustarlo desde aquí. Descárgalo de nuevo con Conectar nodo y súbelo una vez.</p>
+        <p className="border-t border-slate-800 px-5 py-2.5 text-xs text-slate-500">El programa de este ESP32 es anterior y no permite ajustarlo desde aquí. Descárgalo de nuevo con Conectar nodo y súbelo una vez.</p>
       )}
-      {err && <p className="text-xs text-red-300">{err}</p>}
+      {err && <p className="border-t border-slate-800 px-5 py-2.5 text-xs text-red-300">{err}</p>}
     </section>
   )
 }
 
 export default function NodeRules({ roomId, sensorId }: { roomId: string; sensorId?: string }) {
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-4">
-      <OccupancyThreshold roomId={roomId} sensorId={sensorId} />
+    <div className="flex flex-col gap-4">
       <ControllerPanel roomId={roomId} />
+      <OccupancyThreshold roomId={roomId} sensorId={sensorId} />
     </div>
   )
 }
