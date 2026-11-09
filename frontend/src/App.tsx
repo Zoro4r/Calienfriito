@@ -8,7 +8,6 @@ import Summary from './views/Summary'
 import Rooms from './views/Rooms'
 import Reservations from './views/Reservations'
 import UserManagement from './views/UserManagement'
-import Infrastructure from './views/Infrastructure'
 import Register from './views/Register'
 
 // Chart-heavy views load on demand — keeps Recharts out of the initial bundle.
@@ -65,7 +64,7 @@ export default function App() {
           <Route path="aulas"        element={<Rooms />} />
           <Route path="rooms"        element={<Navigate to="/aulas" replace />} />
           <Route path="room/:id"     element={<RoomDetail />} />
-          <Route path="sensors" element={<Navigate to="/infrastructure?vista=sensores" replace />} />
+          <Route path="sensors" element={<Navigate to="/aulas?vista=infraestructura" replace />} />
           {/* Read-only timetable: every role may see it. The old path still works. */}
           <Route path="horarios" element={<Reservations />} />
           <Route path="reservations" element={<Navigate to="/horarios" replace />} />
@@ -77,14 +76,7 @@ export default function App() {
               </AdminRoute>
             }
           />
-          <Route
-            path="infrastructure"
-            element={
-              <AdminRoute>
-                <Infrastructure />
-              </AdminRoute>
-            }
-          />
+          <Route path="infrastructure" element={<Navigate to="/aulas?vista=infraestructura" replace />} />
           <Route
             path="admin/simulation"
             element={

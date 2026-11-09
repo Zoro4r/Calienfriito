@@ -244,7 +244,7 @@ export default function RoomDetail() {
   const coAlert = latest && levelCO(latest.co_ppm ?? 0) === 'alerta'
 
   const devicesList = devices.length === 0 ? (
-    <p className="py-4 text-sm text-slate-400">No hay sensores asignados. Asígnalos desde Infraestructura.</p>
+    <p className="py-4 text-sm text-slate-400">No hay sensores asignados. Conecta su nodo desde Aulas → Infraestructura.</p>
   ) : (
     <div className="divide-y divide-slate-800">
       {devices.map(d => (

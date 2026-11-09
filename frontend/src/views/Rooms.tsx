@@ -7,20 +7,23 @@ import { useAuth } from '../context/AuthContext'
 import { levelTemp, levelHumedad, levelCO2, levelCO, type SensorLevel } from '../utils/sensorColors'
 import { compareRooms, locationLabel, shortName, type Room } from '../utils/rooms'
 import { RoomFilters, useRoomFilter } from '../components/RoomFilters'
-import { fmt, timeAgo, valueText, clockTime, Toast, useToast, type Tone } from '../components/ui'
+import { fmt, timeAgo, valueText, clockTime, Tabs, Toast, useToast, type Tone } from '../components/ui'
+import RoomInfra from '../components/RoomInfra'
 import NewRoomDialog from '../components/NewRoomDialog'
 import NodeConnectDialog from '../components/NodeConnectDialog'
 import { useRoomRows, stateOf, targetOf, shortDate, ORDER, type RoomRow, type Status } from '../hooks/useRoomRows'
 
-// "What is happening in each room?": the rooms on the left (as in Infraestructura) and,
-// for the chosen one, its state, class, equipment, control and the last hour of each
-// measurement. Every room's series come in one request (design rule 11).
+// Aulas: the rooms on the left and, for the chosen one, two tabs. Mediciones answers
+// "what is happening in this room?" (state, class, equipment, control and the last hour of
+// each measurement; every room's series come in one request, design rule 11). Infraestructura
+// (admins) answers "what is installed here?": its node and the room's settings.
 
 type Metric = 'temperature' | 'humidity' | 'co2_ppm' | 'co_ppm'
 type Point = { timestamp: string } & Partial<Record<Metric, number | null>>
 interface SensorRecent { sensor_id: string; room_id: string | null; points: Point[] }
 interface WeekBlock { room_id: string; day: number; start: string; end: string; kind: string; people: number }
 
+type View = 'mediciones' | 'infraestructura'
 const WINDOW_MIN = 60
 const SERIES_POLL_MS = 30_000
 const DOT: Record<Tone, string> = { alert: 'bg-red-400', warn: 'bg-amber-400', high: 'bg-orange-400', ok: 'bg-emerald-400', info: 'bg-sky-400', muted: 'bg-slate-500' }
@@ -140,6 +143,8 @@ export default function Rooms() {
     : undefined) ?? list[0]
   const room = rooms.find(r => r.id === wanted) ?? fallback
   const select = (id: string) => setParams(p => { p.set('aula', id); p.delete('estado'); return p }, { replace: true })
+  const view: View = isAdmin && params.get('vista') === 'infraestructura' ? 'infraestructura' : 'mediciones'
+  const setView = (v: View) => setParams(p => { if (v === 'mediciones') p.delete('vista'); else p.set('vista', v); return p }, { replace: true })
 
   // Who drives the room (admins only: the endpoint is admin-only).
   useEffect(() => {
@@ -179,10 +184,15 @@ export default function Rooms() {
       <div className="flex shrink-0 flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="page-title">Aulas</h1>
-          <p className="mt-1 text-sm text-slate-400">Lo que mide cada aula ahora y en la última hora.</p>
+          <p className="mt-1 text-sm text-slate-400">{view === 'infraestructura' ? 'El nodo de cada aula y su configuración.' : 'Lo que mide cada aula ahora y en la última hora.'}</p>
         </div>
         {isAdmin && <button className="btn btn-primary" onClick={() => setCreating(true)}><Plus size={16} /> Nueva aula</button>}
       </div>
+      {isAdmin && (
+        <div className="shrink-0">
+          <Tabs<View> value={view} onChange={setView} items={[{ value: 'mediciones', label: 'Mediciones' }, { value: 'infraestructura', label: 'Infraestructura' }]} />
+        </div>
+      )}
 
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 lg:grid-cols-[17rem_minmax(0,1fr)]">
         <aside className="surface flex min-h-0 flex-col overflow-hidden">
@@ -213,7 +223,15 @@ export default function Rooms() {
         </aside>
 
         <section className="surface flex min-h-[24rem] flex-col overflow-hidden">
-          {!room ? <p className="m-auto text-sm text-slate-500">Elige un aula.</p> : <>
+          {!room ? <p className="m-auto text-sm text-slate-500">{rooms.length ? 'Elige un aula.' : 'Todavía no hay aulas. Crea la primera con "Nueva aula".'}</p> : view === 'infraestructura' ? (
+            <RoomInfra
+              key={room.id}
+              room={room}
+              notify={notify}
+              onRenamed={id => { reloadRooms(); select(id) }}
+              onDeleted={() => { reloadRooms(); setParams(p => { p.delete('aula'); return p }, { replace: true }) }}
+            />
+          ) : <>
             <header className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b border-slate-800 px-5 py-4">
               <div className="min-w-0">
                 <h2 className="text-xl font-semibold text-white">{room.id} <span className="text-sm font-normal text-slate-400">{shortName(room)}</span></h2>

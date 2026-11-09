@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom'
 import {
   LayoutDashboard, CalendarDays, FlaskConical, DoorOpen,
-  Users, LogOut, Building, TrendingUp,
+  Users, LogOut, TrendingUp,
   AlertTriangle, X, ShieldAlert, Menu, Clock, ChevronDown,
 } from 'lucide-react'
 import axios from 'axios'
@@ -29,7 +29,6 @@ const NAV: { group: string; items: NavItem[] }[] = [
     { to: '/roi',          label: 'Rentabilidad',    icon: <TrendingUp size={18} />,   roles: ['admin'] },
   ] },
   { group: 'Administración', items: [
-    { to: '/infrastructure',   label: 'Infraestructura', icon: <Building size={18} />,     roles: ['admin'] },
     { to: '/admin/users',      label: 'Usuarios',        icon: <Users size={18} />,        roles: ['admin'] },
     { to: '/admin/simulation', label: 'Simulación',      icon: <FlaskConical size={18} />, roles: ['admin'] },
   ] },

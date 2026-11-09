@@ -5,7 +5,7 @@ import { NUM_INPUT_MODS } from '../utils/formStyles'
 import type { Room } from '../utils/rooms'
 import { Dialog } from './ui'
 
-// Room form: editing lives in Infraestructura (RoomDialog); creating, together with the
+// Room form: editing lives in Aulas → Infraestructura (RoomDialog); creating, together with the
 // node, in Aulas (NewRoomDialog). Both share the fields, checks and history warnings below.
 // A new room only asks for its name, which is also its code (the AULA of the ESP32); capacity
 // and target temperature start with defaults, and building and floor can be set later when editing.
@@ -135,7 +135,7 @@ export function RoomNotices({ form, err }: { form: FormState; err: string | null
   </>
 }
 
-/** Edit a room (Infraestructura). */
+/** Edit a room (Aulas → Infraestructura). */
 export default function RoomDialog({ original, onClose, onDelete, onSaved }: {
   original: Room
   onClose: () => void
