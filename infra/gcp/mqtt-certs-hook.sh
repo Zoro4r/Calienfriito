@@ -1,6 +1,6 @@
 #!/bin/sh
 # Certbot deploy hook: copies the certificate for Mosquitto (it runs as uid 1883 and cannot read /etc/letsencrypt) and restarts it.
-D=35.239.3.148.sslip.io
+D=136.115.102.131.sslip.io
 mkdir -p /opt/ccs-mqtt-certs
 cp -L /etc/letsencrypt/live/$D/fullchain.pem /etc/letsencrypt/live/$D/privkey.pem /opt/ccs-mqtt-certs/
 chown -R 1883:1883 /opt/ccs-mqtt-certs && chmod 600 /opt/ccs-mqtt-certs/privkey.pem

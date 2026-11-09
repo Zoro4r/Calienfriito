@@ -1,13 +1,13 @@
 # Despliegue en la VM de GCP
 
 La VM `ccs-iot-vm` (proyecto `ccs-iot-2026`, e2-micro, us-central1-a) sirve el dashboard en
-`https://35.239.3.148.sslip.io` y recibe la telemetría del nodo por MQTT con TLS en el puerto 8883.
+`https://136.115.102.131.sslip.io` y recibe la telemetría del nodo por MQTT con TLS en el puerto 8883.
 Despliega la rama `ccs-prod`.
 
 | Archivo | Para qué |
 |---|---|
 | `../docker-compose.gcp.yml` | Overlay sobre `docker-compose.yml` y `docker-compose.prod.yml`: monta la config de nginx para este dominio, le da a Mosquitto un listener TLS con contraseña y le dice al backend cómo llegan los nodos al broker (`NODE_MQTT_*`, lo que muestra "Conectar nodo"). |
-| `nginx.gcp.conf` | Copia de `frontend/nginx.prod.conf` con el dominio `35.239.3.148.sslip.io`. |
+| `nginx.gcp.conf` | Copia de `frontend/nginx.prod.conf` con el dominio `136.115.102.131.sslip.io`. |
 | `mosquitto.gcp.conf` | 1883 sin clave solo para el backend dentro de Docker (cerrado hacia internet); 8883 con TLS y usuario. |
 | `mqtt-certs-hook.sh` | Hook de certbot: copia el certificado para Mosquitto y reinicia Mosquitto y nginx al renovarse. |
 
@@ -21,7 +21,7 @@ Despliega la rama `ccs-prod`.
 
 ```sh
 # En la VM, con Docker, git y certbot instalados, y los puertos 80, 443 y 8883 abiertos (regla ccs-web-mqtt)
-D=35.239.3.148.sslip.io
+D=136.115.102.131.sslip.io
 sudo git clone -b ccs-prod https://github.com/Zoro4r/Calienfriito.git /opt/ccs && sudo chown -R $USER /opt/ccs
 cd /opt/ccs   # crear .env (ver .env.example) con COMPOSE_FILE como arriba
 sudo mkdir -p /etc/letsencrypt/renewal-hooks/deploy
