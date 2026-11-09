@@ -7,7 +7,9 @@ import { useAuth } from '../context/AuthContext'
 import { levelTemp, levelHumedad, levelCO2, levelCO, type SensorLevel } from '../utils/sensorColors'
 import { compareRooms, locationLabel, shortName, type Room } from '../utils/rooms'
 import { RoomFilters, useRoomFilter } from '../components/RoomFilters'
-import { fmt, timeAgo, valueText, clockTime, Tabs, Toast, useToast, type Tone } from '../components/ui'
+import { fmt, timeAgo, valueText, toneText, clockTime, Tabs, Toast, useToast, LEVEL_TONE, type Tone } from '../components/ui'
+import { tempBand, humBand, coBand, type Band } from '../components/NodeLive'
+import { getStatusLabel } from '../utils/sensorColors'
 import RoomInfra from '../components/RoomInfra'
 import RoomDetail, { type Tab as RoomTab } from './RoomDetail'
 import NewRoomDialog from '../components/NewRoomDialog'
@@ -25,7 +27,8 @@ interface SensorRecent { sensor_id: string; room_id: string | null; points: Poin
 interface WeekBlock { room_id: string; day: number; start: string; end: string; kind: string; people: number }
 
 type View = 'mediciones' | RoomTab | 'infraestructura'
-const ROOM_TABS: RoomTab[] = ['vivo', 'estrategias', 'control', 'historial', 'config']
+// En vivo stays only on the full room page (Abrir aula): Mediciones covers it here.
+const ROOM_TABS: RoomTab[] = ['estrategias', 'control', 'historial', 'config']
 const WINDOW_MIN = 60
 const SERIES_POLL_MS = 30_000
 const DOT: Record<Tone, string> = { alert: 'bg-red-400', warn: 'bg-amber-400', high: 'bg-orange-400', ok: 'bg-emerald-400', info: 'bg-sky-400', muted: 'bg-slate-500' }
@@ -64,11 +67,15 @@ function equipment(r: RoomRow): string {
   return ai === 'ON' ? 'Enfriando' : ai ? 'En espera' : '—'
 }
 
-function MetricChart({ label, unit, dec, metric, points, value, level, reference, refLabel, muted }: {
+function MetricChart({ label, unit, dec, metric, points, value, level, band, reference, refLabel, muted }: {
   label: string; unit: string; dec: number; metric: Metric; points: Point[]; value: number | null | undefined
-  level: SensorLevel | null; reference: number; refLabel: string; muted: boolean
+  level: SensorLevel | null; band?: Band | null; reference: number; refLabel: string; muted: boolean
 }) {
   const data = points.map(p => ({ t: p.timestamp, v: p[metric] ?? null }))
+  // With the node's rule (band), the value takes the rule's color, and only when out of range.
+  const valueColor = muted ? 'text-slate-500'
+    : band ? (band.tone === 'ok' || band.tone === 'muted' ? 'text-white' : toneText(band.tone))
+      : level ? valueText(level) : 'text-white'
   return (
     <div className="surface-inset flex min-h-[10rem] flex-col gap-2 px-4 py-3">
       <div className="flex items-baseline justify-between gap-3">
@@ -76,8 +83,11 @@ function MetricChart({ label, unit, dec, metric, points, value, level, reference
           <span className="text-sm font-semibold text-white">{label}</span>
           <span className="text-xs text-slate-500">Línea: {refLabel}</span>
         </span>
-        <span className={`text-xl font-semibold tabular-nums ${!muted && level ? valueText(level) : muted ? 'text-slate-500' : 'text-white'}`}>
-          {value == null ? '—' : fmt(value, dec)}<span className="ml-1 text-sm font-normal text-slate-500">{unit}</span>
+        <span className="flex flex-col items-end">
+          <span className={`text-xl font-semibold tabular-nums ${valueColor}`}>
+            {value == null ? '—' : fmt(value, dec)}<span className="ml-1 text-sm font-normal text-slate-500">{unit}</span>
+          </span>
+          {band && !muted && <span className="flex items-center gap-1.5 text-xs text-slate-400"><span className={`h-1.5 w-1.5 rounded-full ${DOT[band.tone]}`} />{band.text}</span>}
         </span>
       </div>
       <div className="min-h-0 flex-1">
@@ -182,6 +192,8 @@ export default function Rooms() {
     return best
   }, [series, room])
   const target = room ? targetOf(room, l) : 24
+  // Node rooms report their decision: their temperature is read against the node's rules.
+  const hasNode = !!l?.node_state?.accion
 
   return (
     <div className="flex flex-col gap-4 lg:h-full lg:min-h-0">
@@ -226,7 +238,6 @@ export default function Rooms() {
             <div className="shrink-0 overflow-x-auto px-5 pt-2">
               <Tabs<View> value={view} onChange={setView} items={[
                 { value: 'mediciones', label: 'Mediciones' },
-                { value: 'vivo', label: 'En vivo' },
                 { value: 'estrategias', label: 'Aprendizaje' },
                 { value: 'control', label: 'Control' },
                 { value: 'historial', label: 'Historial' },
@@ -269,13 +280,13 @@ export default function Rooms() {
 
             <div className="grid min-h-0 flex-1 auto-rows-fr grid-cols-1 gap-3 overflow-y-auto p-5 md:grid-cols-2">
               <MetricChart label="Temperatura" unit="°C" dec={1} metric="temperature" points={points} value={l?.temperature}
-                level={l ? levelTemp(l.temperature, target) : null} reference={target} refLabel={`objetivo ${fmt(target)} °C`} muted={muted} />
+                level={l ? levelTemp(l.temperature, target) : null} band={l && hasNode ? tempBand(l.temperature) : null} reference={target} refLabel={`objetivo ${fmt(target)} °C`} muted={muted} />
               <MetricChart label="CO₂" unit="ppm" dec={0} metric="co2_ppm" points={points} value={l?.co2_ppm}
-                level={l ? levelCO2(l.co2_ppm ?? 0) : null} reference={1500} refLabel="límite 1500 ppm" muted={muted} />
+                level={l ? levelCO2(l.co2_ppm ?? 0) : null} band={l?.co2_ppm != null ? { text: getStatusLabel(levelCO2(l.co2_ppm)), tone: LEVEL_TONE[levelCO2(l.co2_ppm)] } : null} reference={1500} refLabel="límite 1500 ppm" muted={muted} />
               <MetricChart label="Humedad" unit="%" dec={0} metric="humidity" points={points} value={l?.humidity}
-                level={l ? levelHumedad(l.humidity) : null} reference={60} refLabel="húmedo desde 60 %" muted={muted} />
+                level={l ? levelHumedad(l.humidity) : null} band={l ? humBand(l.humidity) : null} reference={60} refLabel="húmedo desde 60 %" muted={muted} />
               <MetricChart label="CO" unit="ppm" dec={1} metric="co_ppm" points={points} value={l?.co_ppm}
-                level={l ? levelCO(l.co_ppm ?? 0) : null} reference={50} refLabel="alarma 50 ppm" muted={muted} />
+                level={l ? levelCO(l.co_ppm ?? 0) : null} band={l ? coBand(l.co_ppm ?? 0) : null} reference={50} refLabel="alarma 50 ppm" muted={muted} />
             </div>
           </>}
         </section>

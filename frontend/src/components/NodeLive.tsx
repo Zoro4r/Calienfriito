@@ -44,7 +44,7 @@ export const stateKey = (n?: NodeState | null) =>
   !n?.accion ? null : n.alarma_co ? 'ALARMA' : n.manual ? 'MANUAL' : n.accion
 
 // ── Bands, as the firmware names them ─────────────────────────────────────────
-type Band = { text: string; tone: Tone }
+export type Band = { text: string; tone: Tone }
 export const tempBand = (t: number): Band =>
   t >= FW.coolOn ? { text: `Cálido (≥ ${FW.coolOn} °C)`, tone: 'warn' }
     : t <= FW.heatOn ? { text: `Fresco (≤ ${FW.heatOn} °C)`, tone: 'info' }
