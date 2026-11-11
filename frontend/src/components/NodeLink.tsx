@@ -66,27 +66,6 @@ export async function ensureNodeSensor(roomId: string) {
   }
 }
 
-// Pins of the node, as wired in the kit; a PCB may use others. What each pin may be:
-// io/out: digital pins safe at boot (no flash, UART or strapping pins that break booting);
-// adc: ADC1 only (ADC2 stops working while WiFi is on); in: input with pull-up (not 34-39).
-type PinKind = 'io' | 'out' | 'adc' | 'in'
-const PINS: { key: string; label: string; def: number; kind: PinKind }[] = [
-  { key: 'DHTPIN', label: 'Sensor DHT (datos)', def: 4, kind: 'io' },
-  { key: 'MQ135_PIN', label: 'MQ-135', def: 34, kind: 'adc' },
-  { key: 'MQ7_PIN', label: 'MQ-7', def: 35, kind: 'adc' },
-  { key: 'LED_R_PIN', label: 'LED rojo', def: 13, kind: 'out' },
-  { key: 'LED_G_PIN', label: 'LED verde', def: 14, kind: 'out' },
-  { key: 'LED_B_PIN', label: 'LED azul', def: 27, kind: 'out' },
-  { key: 'BUZZER_PIN', label: 'Buzzer', def: 26, kind: 'out' },
-  { key: 'FAN_PWM_PIN', label: 'Ventilador PWM', def: 25, kind: 'out' },
-  { key: 'FAN_TACH_PIN', label: 'Ventilador tacómetro', def: 33, kind: 'in' },
-  { key: 'HEATER_PIN', label: 'Calefactor (HW-517)', def: 32, kind: 'out' },
-]
-const DIGITAL = [4, 5, 13, 14, 15, 16, 17, 18, 19, 21, 22, 23, 25, 26, 27, 32, 33]
-const ADC1 = [32, 33, 34, 35, 36, 39]
-const KIT: Record<string, number> = Object.fromEntries(PINS.map(p => [p.key, p.def]))
-const optionsFor = (k: PinKind) => (k === 'adc' ? ADC1 : DIGITAL)
-
 // Escapes a value for a C string literal in the sketch.
 const cString = (s: string) => s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
 
@@ -101,7 +80,6 @@ export function NodeSetup({ roomId }: { roomId: string }) {
   const [mqttPass, setMqttPass] = useState('')
   // The node reads either sensor; only the line #define DHTTYPE changes (DHT11 data is decoded differently).
   const [dht, setDht] = useState<'DHT22' | 'DHT11'>('DHT22')
-  const [pins, setPins] = useState<Record<string, number>>(KIT)
   const [copied, setCopied] = useState(false)
 
   useEffect(() => {
@@ -113,19 +91,13 @@ export function NodeSetup({ roomId }: { roomId: string }) {
   if (template === undefined) return <p className="text-sm text-slate-400">Preparando el programa del nodo…</p>
   if (template === null) return <p className="text-sm text-slate-400">Este servidor no tiene un broker público para nodos (falta NODE_MQTT_HOST en su configuración).</p>
 
-  // Two parts on one pin would fight each other: block the download until fixed.
-  const used = Object.values(pins)
-  const clashes = PINS.filter(p => used.filter(v => v === pins[p.key]).length > 1).map(p => p.label)
-  const custom = PINS.filter(p => pins[p.key] !== p.def).length
-  const ready = ssid.trim() !== '' && mqttPass !== '' && clashes.length === 0
+  const ready = ssid.trim() !== '' && mqttPass !== ''
   const code = template
     // Function replacers: a "$" in a password must not be read as a replacement pattern.
     .replace('__WIFI_SSID__', () => cString(ssid.trim()))
     .replace('__WIFI_PASS__', () => cString(wifiPass))
     .replace('__MQTT_PASS__', () => cString(mqttPass))
     .replace(/#define DHTTYPE(\s+)DHT\d+/, (_m, sp: string) => `#define DHTTYPE${sp}${dht}`)
-    .replace(/^#define (\w+_PIN|DHTPIN)(\s+)\d+(\s+\/\/\s*)D\d+/gm, (m, key: string, sp: string, c: string) =>
-      key in pins ? `#define ${key}${sp}${pins[key]}${c}D${pins[key]}` : m)
 
   function download() {
     const url = URL.createObjectURL(new Blob([code], { type: 'text/plain' }))
@@ -148,31 +120,6 @@ export function NodeSetup({ roomId }: { roomId: string }) {
         </div>
         <span className="text-xs text-slate-500">{dht === 'DHT11' ? 'Menos preciso: ±2 °C y humedad de 20 a 80 %.' : 'El del kit: ±0.5 °C.'}</span>
       </div>
-      <details className="group rounded-lg border border-slate-800" open={custom > 0 || undefined}>
-        <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-3 py-2 text-xs text-slate-400 hover:text-slate-200">
-          <span>Pines del ESP32 · <span className="text-slate-200">{custom ? `${custom} distinto${custom === 1 ? '' : 's'} al kit` : 'los del kit'}</span></span>
-          <span className="text-slate-500 group-open:hidden">Cambiar</span>
-        </summary>
-        <div className="flex flex-col gap-3 border-t border-slate-800 px-3 py-3">
-          <div className="grid grid-cols-2 gap-x-3 gap-y-2 sm:grid-cols-3">
-            {PINS.map(p => (
-              <label key={p.key} className="block">
-                <span className="field-label">{p.label}</span>
-                <select className={`field ${clashes.includes(p.label) ? 'border-red-500/60' : ''}`} value={pins[p.key]}
-                  onChange={e => setPins(s => ({ ...s, [p.key]: Number(e.target.value) }))}>
-                  {optionsFor(p.kind).map(n => <option key={n} value={n}>D{n}{n === p.def ? ' (kit)' : ''}</option>)}
-                </select>
-              </label>
-            ))}
-          </div>
-          <div className="flex flex-wrap items-center gap-3 text-xs">
-            {clashes.length > 0
-              ? <span className="text-red-300">Pin repetido en: {clashes.join(', ')}.</span>
-              : <span className="text-slate-500">Úsalo si tu placa (por ejemplo, una PCB) tiene otros pines que el armado del kit.</span>}
-            {custom > 0 && <button type="button" className="btn btn-ghost ml-auto px-2 py-1 text-xs" onClick={() => setPins(KIT)}>Volver a los del kit</button>}
-          </div>
-        </div>
-      </details>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <label className="block"><span className="field-label">Red WiFi (2.4 GHz)</span>
           <input className="field" value={ssid} onChange={e => setSsid(e.target.value)} placeholder="nombre de la red" autoComplete="off" /></label>
