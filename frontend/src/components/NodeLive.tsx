@@ -159,7 +159,7 @@ export function ActuatorsCard({ node, children, className = '' }: { node: NodeSt
 }
 
 // ── History ───────────────────────────────────────────────────────────────────
-export interface Point { t: number; temperature: number; humidity: number; co: number | null; co2: number | null; adc: number | null; state: string | null }
+export interface Point { t: number; temperature: number | null; humidity: number | null; co: number | null; co2: number | null; adc: number | null; state: string | null }
 
 export const AXIS = { stroke: '#475569', tick: { fontSize: 10, fill: '#94a3b8' } }
 export const tick = (ms: number) => new Date(ms).toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit', second: '2-digit' })

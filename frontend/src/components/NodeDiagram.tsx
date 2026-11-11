@@ -27,7 +27,7 @@ function parts(r: StoredReading | null | undefined) {
   ] : [
     r!.temperature == null
       ? { name: 'DHT22', pin: 'D4', role: 'Temperatura y humedad', health: 'fault', state: 'Falla: no envía temperatura' }
-      : { name: 'DHT22', pin: 'D4', role: 'Temperatura y humedad', health: 'ok', state: `${r!.temperature.toFixed(1)} °C · ${Math.round(r!.humidity)} %` },
+      : { name: 'DHT22', pin: 'D4', role: 'Temperatura y humedad', health: 'ok', state: `${r!.temperature.toFixed(1)} °C · ${r!.humidity == null ? '—' : Math.round(r!.humidity)} %` },
     r!.co2_ppm == null && ns?.co2_proxy == null
       ? { name: 'MQ-135', pin: 'D34', role: 'CO₂ y ocupación', health: 'fault', state: 'Falla: sin lectura' }
       : { name: 'MQ-135', pin: 'D34', role: 'CO₂ y ocupación', health: 'ok',

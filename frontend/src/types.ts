@@ -69,8 +69,8 @@ export interface NodeState {
 // Flat reading document as returned by GET /sensors/.
 export interface StoredReading {
   sensor_id: string
-  temperature: number
-  humidity: number
+  temperature: number | null   // null: the node's DHT22 gave no reading
+  humidity: number | null
   co2_ppm: number | null
   co_ppm: number | null
   is_simulated?: boolean

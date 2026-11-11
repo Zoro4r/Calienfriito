@@ -30,6 +30,8 @@ interface WeekBlock { room_id: string; day: number; start: string; end: string; 
 type View = 'mediciones' | 'horarios' | RoomTab | 'infraestructura'
 // En vivo stays only on the full room page (Abrir aula): Mediciones covers it here.
 const ROOM_TABS: RoomTab[] = ['estrategias', 'control', 'historial', 'config']
+// Shown instead of a value when the node's DHT22 sends no reading.
+const DHT_MISSING: Band = { text: 'Sin lectura del DHT22', tone: 'warn' }
 const WINDOW_MIN = 60
 const SERIES_POLL_MS = 30_000
 const DOT: Record<Tone, string> = { alert: 'bg-red-400', warn: 'bg-amber-400', high: 'bg-orange-400', ok: 'bg-emerald-400', info: 'bg-sky-400', muted: 'bg-slate-500' }
@@ -285,11 +287,11 @@ export default function Rooms() {
 
             <div className="grid min-h-0 flex-1 auto-rows-fr grid-cols-1 gap-3 overflow-y-auto p-5 md:grid-cols-2">
               <MetricChart label="Temperatura" unit="°C" dec={1} metric="temperature" points={points} value={l?.temperature}
-                level={l ? levelTemp(l.temperature, target) : null} band={l && hasNode ? tempBand(l.temperature) : null} reference={target} refLabel={`objetivo ${fmt(target)} °C`} muted={muted} />
+                level={l?.temperature != null ? levelTemp(l.temperature, target) : null} band={l && l.temperature == null ? DHT_MISSING : l && hasNode ? tempBand(l.temperature!) : null} reference={target} refLabel={`objetivo ${fmt(target)} °C`} muted={muted} />
               <MetricChart label="CO₂" unit="ppm" dec={0} metric="co2_ppm" points={points} value={l?.co2_ppm}
                 level={l ? levelCO2(l.co2_ppm ?? 0) : null} band={l?.co2_ppm != null ? { text: getStatusLabel(levelCO2(l.co2_ppm)), tone: LEVEL_TONE[levelCO2(l.co2_ppm)] } : null} reference={1500} refLabel="límite 1500 ppm" muted={muted} />
               <MetricChart label="Humedad" unit="%" dec={0} metric="humidity" points={points} value={l?.humidity}
-                level={l ? levelHumedad(l.humidity) : null} band={l ? humBand(l.humidity) : null} reference={60} refLabel="húmedo desde 60 %" muted={muted} />
+                level={l?.humidity != null ? levelHumedad(l.humidity) : null} band={l ? (l.humidity == null ? DHT_MISSING : humBand(l.humidity)) : null} reference={60} refLabel="húmedo desde 60 %" muted={muted} />
               <MetricChart label="CO" unit="ppm" dec={1} metric="co_ppm" points={points} value={l?.co_ppm}
                 level={l ? levelCO(l.co_ppm ?? 0) : null} band={l ? coBand(l.co_ppm ?? 0) : null} reference={50} refLabel="alarma 50 ppm" muted={muted} />
             </div>

@@ -43,7 +43,8 @@ export function targetOf(room: Room, l: StoredReading | null) {
 }
 
 function levelOf(room: Room, l: StoredReading): SensorLevel {
-  const levels = [levelTemp(l.temperature, targetOf(room, l)), levelCO2(l.co2_ppm ?? 0), levelCO(l.co_ppm ?? 0)]
+  // A node whose DHT22 sends no temperature needs attention: the room is not being regulated.
+  const levels = [l.temperature == null ? 'atencion' as SensorLevel : levelTemp(l.temperature, targetOf(room, l)), levelCO2(l.co2_ppm ?? 0), levelCO(l.co_ppm ?? 0)]
   return levels.reduce((a, b) => (RANK[b] > RANK[a] ? b : a), 'normal' as SensorLevel)
 }
 
@@ -81,6 +82,7 @@ export function stateOf(r: RoomRow): { label: string; tone: Tone } {
     const tone = STATUS[r.status].tone
     if (l.node_state?.alarma_co || levelCO(l.co_ppm ?? 0) !== 'normal') return { label: 'CO alto', tone }
     if (levelCO2(l.co2_ppm ?? 0) !== 'normal') return { label: 'CO₂ elevado', tone }
+    if (l.temperature == null) return { label: 'Sin temperatura', tone }
     return { label: l.temperature > targetOf(r.room, l) ? 'Temperatura alta' : 'Temperatura baja', tone }
   }
   return decision(l) ?? { label: STATUS[r.status].label, tone: STATUS[r.status].tone }

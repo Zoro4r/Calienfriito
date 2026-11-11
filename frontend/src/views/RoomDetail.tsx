@@ -342,8 +342,8 @@ export default function RoomDetail({ roomId, embeddedTab }: { roomId?: string; e
               </Panel>
             )}
             <SensorCard label="Temperatura" value={fmt(latest?.temperature)} unit="°C"
-              band={latest ? (hasNode ? tempBand(latest.temperature) : { text: `${getStatusLabel(levelTemp(latest.temperature, target))} (objetivo ${fmt(target)} °C)`, tone: LEVEL_TONE[levelTemp(latest.temperature, target)] }) : null} />
-            <SensorCard label="Humedad" value={fmt(latest?.humidity, 0)} unit="%" band={latest ? humBand(latest.humidity) : null} />
+              band={latest?.temperature == null ? (latest ? { text: 'Sin lectura del DHT22', tone: 'warn' } : null) : (hasNode ? tempBand(latest.temperature) : { text: `${getStatusLabel(levelTemp(latest.temperature, target))} (objetivo ${fmt(target)} °C)`, tone: LEVEL_TONE[levelTemp(latest.temperature, target)] })} />
+            <SensorCard label="Humedad" value={fmt(latest?.humidity, 0)} unit="%" band={latest?.humidity == null ? (latest ? { text: 'Sin lectura del DHT22', tone: 'warn' } : null) : humBand(latest.humidity)} />
             <SensorCard label="CO (MQ-7)" value={fmt(latest?.co_ppm, 0)} unit="ppm" band={latest ? coBand(latest.co_ppm ?? 0) : null} />
             {hasNode
               ? <SensorCard label="Ocupación (MQ-135)" value={nodeState?.co2_proxy != null ? String(nodeState.co2_proxy) : '—'} unit="ADC"
@@ -373,12 +373,12 @@ export default function RoomDetail({ roomId, embeddedTab }: { roomId?: string; e
           </div>
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:min-h-[300px] lg:flex-1 lg:grid-rows-2">
             <LiveChart title={hasNode ? `Temperatura (°C) · ${FW.heatOn} / ${FW.setpoint} / ${FW.coolOn}` : 'Temperatura (°C)'} data={live_.points} dataKey="temperature" unit="°C"
-              axis={niceAxis(live_.points.map(p => p.temperature), hasNode ? [22, 26] : [16, 28], 2)}
+              axis={niceAxis(live_.points.map(p => p.temperature).filter((v): v is number => v != null), hasNode ? [22, 26] : [16, 28], 2)}
               refs={hasNode
                 ? [{ y: FW.coolOn, color: '#94a3b8' }, { y: FW.setpoint, color: '#34d399' }, { y: FW.heatOn, color: '#94a3b8' }]
                 : [{ y: target, label: 'objetivo', color: '#34d399' }]} />
             <LiveChart title="Humedad relativa (%)" data={live_.points} dataKey="humidity" unit="%"
-              axis={niceAxis(live_.points.map(p => p.humidity), [20, 80], 20)}
+              axis={niceAxis(live_.points.map(p => p.humidity).filter((v): v is number => v != null), [20, 80], 20)}
               refs={[{ y: FW.humHigh, label: `Húmedo ${FW.humHigh}`, color: '#94a3b8' }, { y: FW.humLow, label: `Seco ${FW.humLow}`, color: '#94a3b8' }]} />
             <LiveChart title="CO (ppm)" data={live_.points} dataKey="co" unit="ppm"
               axis={niceAxis(live_.points.map(p => p.co ?? 0), [0, 100], 50)}
