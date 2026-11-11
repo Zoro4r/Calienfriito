@@ -19,8 +19,8 @@ PRECOOL_LOOKAHEAD_MIN = 30
 
 def detect_anomaly(reading: SensorReading) -> bool:
     return (
-        reading.temperature > 40
-        or reading.humidity > 95
+        (reading.temperature is not None and reading.temperature > 40)
+        or (reading.humidity is not None and reading.humidity > 95)
         or reading.co_ppm > 50  # EPA alert threshold for CO
     )
 
@@ -206,6 +206,11 @@ async def process_reading(db, reading: SensorReading, db_sql=None) -> dict:
         room_context = None   # don't include internal flag in response
         cognitive_action = {"ac_status": "DISABLED", "cooling_mode": None, "target": None, "model": "none"}
 
+    # No temperature (the node's DHT22 failed): store the reading, but nothing can decide on it.
+    if cognitive_action is None and reading.temperature is None:
+        cognitive_action = {"ac_status": "DISABLED", "cooling_mode": None, "target": None, "model": "none",
+                            "reason": "Sin temperatura: el DHT22 del nodo no envía lectura"}
+
     if cognitive_action is None:
         cognitive_action = await calculate_cooling_demand(
             reading.temperature, room_context, reading.timestamp, co2_ppm=reading.co2_ppm
@@ -213,7 +218,7 @@ async def process_reading(db, reading: SensorReading, db_sql=None) -> dict:
 
     learning_action = None
     room_id = room_context.get("room_id") if isinstance(room_context, dict) else None
-    if room_id and reading.node_state:
+    if room_id and reading.node_state and reading.temperature is not None:
         try:
             learning_action = await shadow_learning_step(db, room_id, reading, db_sql=db_sql)
         except Exception:   # the shadow controller must never block ingestion

@@ -5,8 +5,10 @@ from typing import Optional
 
 class SensorReading(BaseModel):
     sensor_id: str
-    temperature: float = Field(..., description="Temperature in Celsius")
-    humidity: float = Field(..., description="Relative humidity percentage")
+    # None when the node's DHT22 gave no reading: the rest of the reading is still stored
+    # so the dashboard shows what the node does measure and flags the DHT22.
+    temperature: Optional[float] = Field(None, description="Temperature in Celsius")
+    humidity: Optional[float] = Field(None, description="Relative humidity percentage")
     co2_ppm: Optional[float] = Field(None, description="CO2 concentration in ppm")
     co_ppm: float = Field(0.0, description="Carbon monoxide concentration in ppm (MQ7 sensor)")
     camera_occupancy: Optional[int] = Field(

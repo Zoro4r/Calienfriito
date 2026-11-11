@@ -54,7 +54,8 @@ def _frame(range_key: str, start: datetime, end: datetime, anchor: date, data_st
 
 
 def _out_of_band(temp_expr) -> dict:
-    return {"$or": [{"$lt": [temp_expr, BAND_LO]}, {"$gt": [temp_expr, BAND_HI]}]}
+    # A missing temperature (null sorts below numbers in MongoDB) is not "out of band".
+    return {"$and": [{"$ne": [temp_expr, None]}, {"$or": [{"$lt": [temp_expr, BAND_LO]}, {"$gt": [temp_expr, BAND_HI]}]}]}
 
 
 def _points(rows: list[dict]) -> list[dict]:

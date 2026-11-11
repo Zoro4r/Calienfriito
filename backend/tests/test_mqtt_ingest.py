@@ -37,9 +37,13 @@ def test_keeps_node_occupancy_threshold():
     assert r.node_state["umbral_ocupacion"] == 260
 
 
-def test_skips_reading_without_dht():
+def test_keeps_reading_without_dht():
+    # A failed DHT22 must not hide what the node does measure (CO2, CO, its state).
     data = {**TELEMETRY, "temp_c": None, "humedad": None}
-    assert telemetry_to_reading("ccs/A403/telemetry", json.dumps(data)) is None
+    r = telemetry_to_reading("ccs/A403/telemetry", json.dumps(data))
+    assert r is not None
+    assert r.temperature is None and r.humidity is None
+    assert r.co_ppm == float(TELEMETRY["co_ppm"])
 
 
 def test_skips_other_topics_and_bad_payloads():
@@ -75,3 +79,10 @@ def test_retained_status_has_unknown_time_and_bad_messages_are_ignored():
     assert status_update("ccs/A403/status", b"offline", retained=True)["since"] is None
     assert status_update("ccs/A403/status", b"rebooting") is None
     assert status_update("ccs/A403/telemetry", b"online") is None
+
+
+def test_anomaly_check_tolerates_missing_dht():
+    from app.models.sensor import SensorReading
+    from app.services.data_service import detect_anomaly
+    assert detect_anomaly(SensorReading(sensor_id="s-X", co_ppm=10)) is False
+    assert detect_anomaly(SensorReading(sensor_id="s-X", co_ppm=60)) is True

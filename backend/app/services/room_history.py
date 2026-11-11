@@ -65,10 +65,15 @@ def summarize_day(docs: list[dict], fan_max_w: float, heater_w: float) -> dict:
 
         # 5-minute series
         b = ts.replace(minute=ts.minute - ts.minute % BUCKET_MIN, second=0, microsecond=0)
-        acc = buckets.setdefault(b, {"n": 0, "temp": 0.0, "hum": 0.0, "co2": 0.0, "co2_n": 0, "co": 0.0, "fan": 0.0, "heat": 0.0})
+        acc = buckets.setdefault(b, {"n": 0, "temp": 0.0, "temp_n": 0, "hum": 0.0, "hum_n": 0, "co2": 0.0, "co2_n": 0, "co": 0.0, "fan": 0.0, "heat": 0.0})
         acc["n"] += 1
-        acc["temp"] += temp or 0.0
-        acc["hum"] += d.get("humidity") or 0.0
+        # Readings without DHT data (None) don't pull the averages towards 0.
+        if temp is not None:
+            acc["temp"] += temp
+            acc["temp_n"] += 1
+        if d.get("humidity") is not None:
+            acc["hum"] += d["humidity"]
+            acc["hum_n"] += 1
         if d.get("co2_ppm") is not None:
             acc["co2"] += d["co2_ppm"]
             acc["co2_n"] += 1
@@ -142,8 +147,8 @@ def summarize_day(docs: list[dict], fan_max_w: float, heater_w: float) -> dict:
 
     series = [{
         "t": b.strftime(FMT),
-        "temp": round(a["temp"] / a["n"], 2),
-        "hum": round(a["hum"] / a["n"], 1),
+        "temp": round(a["temp"] / a["temp_n"], 2) if a["temp_n"] else None,
+        "hum": round(a["hum"] / a["hum_n"], 1) if a["hum_n"] else None,
         "co2": round(a["co2"] / a["co2_n"]) if a["co2_n"] else None,
         "co": round(a["co"], 1),
         "fan": round(100 * a["fan"] / a["n"], 1),

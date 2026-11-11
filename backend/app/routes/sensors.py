@@ -61,8 +61,8 @@ class LearningActionOut(BaseModel):
 
 class SensorReadingOut(BaseModel):
     sensor_id: str
-    temperature: float
-    humidity: float
+    temperature: Optional[float] = None
+    humidity: Optional[float] = None
     co2_ppm: Optional[float] = None
     co_ppm: float = 0.0
     camera_occupancy: Optional[int] = None
@@ -392,7 +392,7 @@ async def room_history(
             ns = d.get("node_state") or {}
             motivo = (ns.get("motivo") or "").replace('"', "'")
             lines.append(",".join(str(v) for v in [
-                d["timestamp"][:19], d.get("temperature", ""), d.get("humidity", ""), d.get("co2_ppm") or "", d.get("co_ppm") or "",
+                d["timestamp"][:19], "" if d.get("temperature") is None else d["temperature"], "" if d.get("humidity") is None else d["humidity"], d.get("co2_ppm") or "", d.get("co_ppm") or "",
                 ns.get("accion", ""), round((ns.get("ventilador_pwm") or 0) * 100 / 255), int(bool(ns.get("calefactor"))),
                 int((ns.get("co2_proxy") or 0) >= 2200), int(bool(ns.get("alarma_co"))), int(bool(ns.get("manual"))), f'"{motivo}"',
             ]))

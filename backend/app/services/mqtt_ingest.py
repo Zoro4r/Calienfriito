@@ -85,8 +85,8 @@ def telemetry_to_reading(topic: str, payload: bytes | str) -> SensorReading | No
     """Translate one node telemetry message into a SensorReading.
 
     Returns None (and the message is skipped) when the topic is not
-    `ccs/<room>/telemetry`, the payload is not valid JSON, or the DHT had no reading
-    (temperature/humidity are mandatory in SensorReading).
+    `ccs/<room>/telemetry` or the payload is not valid JSON. A reading without DHT data
+    (temp_c/humedad null) is kept: CO2, CO and the node's state still matter.
     """
     parts = topic.split("/")
     if len(parts) != 3 or parts[2] != "telemetry" or not parts[1]:
@@ -98,16 +98,13 @@ def telemetry_to_reading(topic: str, payload: bytes | str) -> SensorReading | No
         return None
     if not isinstance(data, dict):
         return None
-    if data.get("temp_c") is None or data.get("humedad") is None:
-        logger.debug("MQTT: reading without DHT data on %s skipped", topic)
-        return None
 
     try:
         return SensorReading(
             # Seed convention: one device per room, id "s-<room>" (e.g. s-A403).
             sensor_id=f"s-{parts[1]}",
-            temperature=float(data["temp_c"]),
-            humidity=float(data["humedad"]),
+            temperature=float(data["temp_c"]) if data.get("temp_c") is not None else None,
+            humidity=float(data["humedad"]) if data.get("humedad") is not None else None,
             co2_ppm=data.get("co2_ppm"),
             co_ppm=float(data.get("co_ppm") or 0.0),
             is_simulated=bool(data.get("is_simulated", False)),
