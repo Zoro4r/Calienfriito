@@ -342,8 +342,8 @@ export default function RoomDetail({ roomId, embeddedTab }: { roomId?: string; e
               </Panel>
             )}
             <SensorCard label="Temperatura" value={fmt(latest?.temperature)} unit="°C"
-              band={latest?.temperature == null ? (latest ? { text: 'Sin lectura del DHT22', tone: 'warn' } : null) : (hasNode ? tempBand(latest.temperature) : { text: `${getStatusLabel(levelTemp(latest.temperature, target))} (objetivo ${fmt(target)} °C)`, tone: LEVEL_TONE[levelTemp(latest.temperature, target)] })} />
-            <SensorCard label="Humedad" value={fmt(latest?.humidity, 0)} unit="%" band={latest?.humidity == null ? (latest ? { text: 'Sin lectura del DHT22', tone: 'warn' } : null) : humBand(latest.humidity)} />
+              band={latest?.temperature == null ? (latest ? { text: 'Sin lectura del sensor DHT', tone: 'warn' } : null) : (hasNode ? tempBand(latest.temperature) : { text: `${getStatusLabel(levelTemp(latest.temperature, target))} (objetivo ${fmt(target)} °C)`, tone: LEVEL_TONE[levelTemp(latest.temperature, target)] })} />
+            <SensorCard label="Humedad" value={fmt(latest?.humidity, 0)} unit="%" band={latest?.humidity == null ? (latest ? { text: 'Sin lectura del sensor DHT', tone: 'warn' } : null) : humBand(latest.humidity)} />
             <SensorCard label="CO (MQ-7)" value={fmt(latest?.co_ppm, 0)} unit="ppm" band={latest ? coBand(latest.co_ppm ?? 0) : null} />
             {hasNode
               ? <SensorCard label="Ocupación (MQ-135)" value={nodeState?.co2_proxy != null ? String(nodeState.co2_proxy) : '—'} unit="ADC"

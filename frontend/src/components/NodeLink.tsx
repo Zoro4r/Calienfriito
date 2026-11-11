@@ -78,6 +78,8 @@ export function NodeSetup({ roomId }: { roomId: string }) {
   const [ssid, setSsid] = useState('')
   const [wifiPass, setWifiPass] = useState('')
   const [mqttPass, setMqttPass] = useState('')
+  // The node reads either sensor; only the line #define DHTTYPE changes (DHT11 data is decoded differently).
+  const [dht, setDht] = useState<'DHT22' | 'DHT11'>('DHT22')
   const [copied, setCopied] = useState(false)
 
   useEffect(() => {
@@ -95,6 +97,7 @@ export function NodeSetup({ roomId }: { roomId: string }) {
     .replace('__WIFI_SSID__', () => cString(ssid.trim()))
     .replace('__WIFI_PASS__', () => cString(wifiPass))
     .replace('__MQTT_PASS__', () => cString(mqttPass))
+    .replace(/#define DHTTYPE(\s+)DHT\d+/, (_m, sp: string) => `#define DHTTYPE${sp}${dht}`)
 
   function download() {
     const url = URL.createObjectURL(new Blob([code], { type: 'text/plain' }))
@@ -107,6 +110,16 @@ export function NodeSetup({ roomId }: { roomId: string }) {
   const b = 'font-semibold text-white'
   return (
     <div className="flex flex-col gap-3 text-sm text-slate-300">
+      <div className="flex flex-wrap items-center gap-3">
+        <span className="text-xs text-slate-400">Sensor de temperatura</span>
+        <div className="segmented flex p-0.5" role="radiogroup" aria-label="Sensor de temperatura">
+          {(['DHT22', 'DHT11'] as const).map(s => (
+            <button key={s} type="button" role="radio" aria-checked={dht === s} onClick={() => setDht(s)}
+              className={`segmented-item px-3 py-1 text-xs ${dht === s ? 'segmented-item-active' : ''}`}>{s}</button>
+          ))}
+        </div>
+        <span className="text-xs text-slate-500">{dht === 'DHT11' ? 'Menos preciso: ±2 °C y humedad de 20 a 80 %.' : 'El del kit: ±0.5 °C.'}</span>
+      </div>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <label className="block"><span className="field-label">Red WiFi (2.4 GHz)</span>
           <input className="field" value={ssid} onChange={e => setSsid(e.target.value)} placeholder="nombre de la red" autoComplete="off" /></label>

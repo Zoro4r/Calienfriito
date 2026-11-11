@@ -30,8 +30,8 @@ interface WeekBlock { room_id: string; day: number; start: string; end: string; 
 type View = 'mediciones' | 'horarios' | RoomTab | 'infraestructura'
 // En vivo stays only on the full room page (Abrir aula): Mediciones covers it here.
 const ROOM_TABS: RoomTab[] = ['estrategias', 'control', 'historial', 'config']
-// Shown instead of a value when the node's DHT22 sends no reading.
-const DHT_MISSING: Band = { text: 'Sin lectura del DHT22', tone: 'warn' }
+// Shown instead of a value when the node's DHT sensor (DHT22 or DHT11) sends no reading.
+const DHT_MISSING: Band = { text: 'Sin lectura del sensor DHT', tone: 'warn' }
 const WINDOW_MIN = 60
 const SERIES_POLL_MS = 30_000
 const DOT: Record<Tone, string> = { alert: 'bg-red-400', warn: 'bg-amber-400', high: 'bg-orange-400', ok: 'bg-emerald-400', info: 'bg-sky-400', muted: 'bg-slate-500' }

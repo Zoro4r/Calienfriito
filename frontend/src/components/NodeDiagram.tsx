@@ -23,11 +23,11 @@ function parts(r: StoredReading | null | undefined) {
   const unknown = (name: string, pin: string, role: string): Part => ({ name, pin, role, health: 'unknown', state: 'Sin lecturas' })
 
   const sensors: Part[] = !has ? [
-    unknown('DHT22', 'D4', 'Temperatura y humedad'), unknown('MQ-135', 'D34', 'CO₂ y ocupación'), unknown('MQ-7', 'D35', 'Monóxido de carbono'),
+    unknown('DHT22 / DHT11', 'D4', 'Temperatura y humedad'), unknown('MQ-135', 'D34', 'CO₂ y ocupación'), unknown('MQ-7', 'D35', 'Monóxido de carbono'),
   ] : [
     r!.temperature == null
-      ? { name: 'DHT22', pin: 'D4', role: 'Temperatura y humedad', health: 'fault', state: 'Falla: no envía temperatura' }
-      : { name: 'DHT22', pin: 'D4', role: 'Temperatura y humedad', health: 'ok', state: `${r!.temperature.toFixed(1)} °C · ${r!.humidity == null ? '—' : Math.round(r!.humidity)} %` },
+      ? { name: 'DHT22 / DHT11', pin: 'D4', role: 'Temperatura y humedad', health: 'fault', state: 'Falla: no envía temperatura' }
+      : { name: 'DHT22 / DHT11', pin: 'D4', role: 'Temperatura y humedad', health: 'ok', state: `${r!.temperature.toFixed(1)} °C · ${r!.humidity == null ? '—' : Math.round(r!.humidity)} %` },
     r!.co2_ppm == null && ns?.co2_proxy == null
       ? { name: 'MQ-135', pin: 'D34', role: 'CO₂ y ocupación', health: 'fault', state: 'Falla: sin lectura' }
       : { name: 'MQ-135', pin: 'D34', role: 'CO₂ y ocupación', health: 'ok',
