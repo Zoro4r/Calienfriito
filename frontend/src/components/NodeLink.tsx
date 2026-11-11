@@ -66,6 +66,23 @@ export async function ensureNodeSensor(roomId: string) {
   }
 }
 
+// The node's board. "kit" is the breadboard build (DHT22 on D4, the template as is). "pcb" is the
+// classmate's PCB: DHT11 on GPIO13, RGB LED on 32/33/25, fan PWM on 19 through a MOSFET, and no
+// tachometer or heater (pin -1: the firmware leaves them alone; RPM is estimated from the power).
+type Board = 'kit' | 'pcb'
+const PCB_PINS: Record<string, number> = {
+  DHTPIN: 13, LED_R_PIN: 32, LED_G_PIN: 33, LED_B_PIN: 25, BUZZER_PIN: 26,
+  FAN_PWM_PIN: 19, FAN_TACH_PIN: -1, HEATER_PIN: -1, MQ135_PIN: 34, MQ7_PIN: 35,
+}
+function withBoard(code: string, board: Board) {
+  if (board === 'kit') return code
+  return code
+    .replace(/#define DHTTYPE(\s+)DHT\d+/, (_m, sp: string) => `#define DHTTYPE${sp}DHT11`)
+    .replace(/^#define (\w+_PIN|DHTPIN)(\s+)-?\d+(\s+\/\/\s*)D\d+/gm, (m, key: string, sp: string, c: string) =>
+      key in PCB_PINS ? `#define ${key}${sp}${PCB_PINS[key]}${c}${PCB_PINS[key] < 0 ? 'no existe en la PCB:' : `GPIO${PCB_PINS[key]}`}` : m)
+    .replace(/const bool\s+TACOMETRO_SIMULADO(\s+)= false;/, 'const bool  TACOMETRO_SIMULADO$1= true;  // la PCB no tiene tacometro: RPM estimadas')
+}
+
 // Escapes a value for a C string literal in the sketch.
 const cString = (s: string) => s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
 
@@ -78,8 +95,8 @@ export function NodeSetup({ roomId }: { roomId: string }) {
   const [ssid, setSsid] = useState('')
   const [wifiPass, setWifiPass] = useState('')
   const [mqttPass, setMqttPass] = useState('')
-  // The node reads either sensor; only the line #define DHTTYPE changes (DHT11 data is decoded differently).
-  const [dht, setDht] = useState<'DHT22' | 'DHT11'>('DHT22')
+  // Which board: the kit (DHT22, its pins) or the classmate's PCB (DHT11 and its own pins).
+  const [board, setBoard] = useState<Board>('kit')
   const [copied, setCopied] = useState(false)
 
   useEffect(() => {
@@ -92,12 +109,12 @@ export function NodeSetup({ roomId }: { roomId: string }) {
   if (template === null) return <p className="text-sm text-slate-400">Este servidor no tiene un broker público para nodos (falta NODE_MQTT_HOST en su configuración).</p>
 
   const ready = ssid.trim() !== '' && mqttPass !== ''
-  const code = template
+  const base = template
     // Function replacers: a "$" in a password must not be read as a replacement pattern.
     .replace('__WIFI_SSID__', () => cString(ssid.trim()))
     .replace('__WIFI_PASS__', () => cString(wifiPass))
     .replace('__MQTT_PASS__', () => cString(mqttPass))
-    .replace(/#define DHTTYPE(\s+)DHT\d+/, (_m, sp: string) => `#define DHTTYPE${sp}${dht}`)
+  const code = withBoard(base, board)
 
   function download() {
     const url = URL.createObjectURL(new Blob([code], { type: 'text/plain' }))
@@ -111,14 +128,18 @@ export function NodeSetup({ roomId }: { roomId: string }) {
   return (
     <div className="flex flex-col gap-3 text-sm text-slate-300">
       <div className="flex flex-wrap items-center gap-3">
-        <span className="text-xs text-slate-400">Sensor de temperatura</span>
-        <div className="segmented flex p-0.5" role="radiogroup" aria-label="Sensor de temperatura">
-          {(['DHT22', 'DHT11'] as const).map(s => (
-            <button key={s} type="button" role="radio" aria-checked={dht === s} onClick={() => setDht(s)}
-              className={`segmented-item px-3 py-1 text-xs ${dht === s ? 'segmented-item-active' : ''}`}>{s}</button>
+        <span className="text-xs text-slate-400">Placa</span>
+        <div className="segmented flex p-0.5" role="radiogroup" aria-label="Placa del nodo">
+          {([['kit', 'Protoboard'], ['pcb', 'PCB']] as const).map(([v, label]) => (
+            <button key={v} type="button" role="radio" aria-checked={board === v} onClick={() => setBoard(v)}
+              className={`segmented-item px-3 py-1 text-xs ${board === v ? 'segmented-item-active' : ''}`}>{label}</button>
           ))}
         </div>
-        <span className="text-xs text-slate-500">{dht === 'DHT11' ? 'Menos preciso: ±2 °C y humedad de 20 a 80 %.' : 'El del kit: ±0.5 °C.'}</span>
+        <span className="text-xs text-slate-500">
+          {board === 'pcb'
+            ? 'DHT11 en GPIO13, LED en 32/33/25, ventilador en 19; sin tacómetro ni calefactor.'
+            : 'DHT22 en D4 y los pines del armado en protoboard.'}
+        </span>
       </div>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <label className="block"><span className="field-label">Red WiFi (2.4 GHz)</span>
