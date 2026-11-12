@@ -239,7 +239,7 @@ export default function Rooms() {
 
         <section className="surface flex min-h-[24rem] flex-col overflow-hidden">
           {room && (
-            <div className="shrink-0 overflow-x-auto px-5 pt-2">
+            <div className="shrink-0 overflow-x-auto px-5 pt-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
               <Tabs<View> value={view} onChange={setView} items={[
                 { value: 'mediciones', label: 'Mediciones' },
                 { value: 'horarios', label: 'Horarios' },
@@ -285,7 +285,8 @@ export default function Rooms() {
               </span>
             </div>
 
-            <div className="grid min-h-0 flex-1 auto-rows-fr grid-cols-1 gap-3 overflow-y-auto p-5 md:grid-cols-2">
+            {/* Rows share the height but never shrink below a chart (11rem): on a short or zoomed screen the panel scrolls instead of overlapping them. */}
+            <div className="grid min-h-0 flex-1 auto-rows-[minmax(11rem,1fr)] grid-cols-1 gap-3 overflow-y-auto p-5 md:grid-cols-2">
               <MetricChart label="Temperatura" unit="°C" dec={1} metric="temperature" points={points} value={l?.temperature}
                 level={l?.temperature != null ? levelTemp(l.temperature, target) : null} band={l && l.temperature == null ? DHT_MISSING : l && hasNode ? tempBand(l.temperature!) : null} reference={target} refLabel={`objetivo ${fmt(target)} °C`} muted={muted} />
               <MetricChart label="CO₂" unit="ppm" dec={0} metric="co2_ppm" points={points} value={l?.co2_ppm}
