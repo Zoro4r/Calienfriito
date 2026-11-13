@@ -44,7 +44,8 @@ def get_room_context(db_sql, sensor_id: str, reading_timestamp: datetime) -> dic
 
     if not device.control_enabled:
         logger.info("sensor_id=%s control_enabled=False — no cognitive action.", sensor_id)
-        return {"_control_disabled": True}
+        # The room is still known: the predictive controller observes it in shadow.
+        return {"_control_disabled": True, "room_id": device.room_id}
 
     room = device.room
 
@@ -196,7 +197,9 @@ async def process_reading(db, reading: SensorReading, db_sql=None) -> dict:
         return {"sensor_id": reading.sensor_id, "skipped": True, "reason": "device_inactive"}
 
     # Control disabled → save reading but emit no cognitive action
+    shadow_room = None
     if isinstance(room_context, dict) and room_context.get("_control_disabled"):
+        shadow_room = room_context.get("room_id")   # the shadow controller only observes: it still runs
         room_context = None   # don't include internal flag in response
         cognitive_action = {"ac_status": "DISABLED", "cooling_mode": None, "target": None, "model": "none"}
 
@@ -211,7 +214,7 @@ async def process_reading(db, reading: SensorReading, db_sql=None) -> dict:
         )
 
     learning_action = None
-    room_id = room_context.get("room_id") if isinstance(room_context, dict) else None
+    room_id = room_context.get("room_id") if isinstance(room_context, dict) else shadow_room
     if room_id and reading.node_state and reading.temperature is not None:
         try:
             learning_action = await shadow_learning_step(db, room_id, reading, db_sql=db_sql)
