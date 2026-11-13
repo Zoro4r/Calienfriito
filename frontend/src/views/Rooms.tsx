@@ -167,7 +167,7 @@ export default function Rooms() {
   useEffect(() => {
     if (user?.role !== 'admin' || !room || control[room.id]) return
     api.get<{ mode: string }>(`/sensors/rooms/${room.id}/controller`)
-      .then(r => setControl(c => ({ ...c, [room.id]: r.data.mode === 'learning' ? 'Aprendizaje automático' : 'Reglas del nodo' })))
+      .then(r => setControl(c => ({ ...c, [room.id]: r.data.mode === 'learning' ? 'Control predictivo' : 'Reglas del nodo' })))
       .catch(() => {})
   }, [user?.role, room, control])
 

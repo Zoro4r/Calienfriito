@@ -94,7 +94,7 @@ export default function ControllerPanel({ roomId }: { roomId: string }) {
           onSelect={() => { setConfirming(false); choose('rules') }}
         />
         <Option
-          title="Aprendizaje automático" desc="Prepara el aula según el horario y ajusta cada 5 minutos."
+          title="Control predictivo" desc="Pronostica la temperatura a 30 min (Chronos) y enciende el ventilador antes de que suba."
           selected={mode === 'learning' || confirming} disabled={locked}
           status={mode === 'learning' ? (orderFresh ? 'Controlando' : 'Sin órdenes recientes') : 'En sombra'}
           statusDot={mode === 'learning' ? (orderFresh ? 'bg-emerald-400' : 'bg-amber-400') : 'bg-slate-500'}

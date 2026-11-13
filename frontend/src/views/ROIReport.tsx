@@ -34,7 +34,7 @@ interface RoiData {
 
 type Row = Room & RoomEnergy & { real: number }
 
-const STRATEGY: Record<string, string> = { rules: 'Reglas del nodo', learning: 'Aprendizaje automático' }
+const STRATEGY: Record<string, string> = { rules: 'Reglas del nodo', learning: 'Control predictivo' }
 
 const num = (n: number, dec = 0) => n.toLocaleString('es-PE', { minimumFractionDigits: dec, maximumFractionDigits: dec })
 const soles = (n: number, dec = 0) => `${n < 0 ? '−' : ''}S/ ${num(Math.abs(n), dec)}`

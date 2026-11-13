@@ -84,6 +84,10 @@ export interface StoredReading {
 export interface LearningAction {
   fan_pct: number
   heater_pct: number
-  minutes_learned: number
   ready: boolean
+  forecast_30?: number | null       // median temperature expected in 30 min (Chronos)
+  forecast_30_p90?: number | null
+  minutes_seen?: number | null
+  model?: string | null
+  minutes_learned?: number | null   // readings stored by the earlier learning controller
 }
