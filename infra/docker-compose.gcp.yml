@@ -5,7 +5,7 @@ services:
   backend:
     environment:
       # Shown in Aulas → "Conectar nodo". The broker password is never here.
-      NODE_MQTT_HOST: 136.115.102.131.sslip.io
+      NODE_MQTT_HOST: calienfriito-utec.duckdns.org
       NODE_MQTT_PORT: "8883"
       NODE_MQTT_USER: nodo
   frontend:

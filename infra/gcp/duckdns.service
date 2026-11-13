@@ -1,0 +1,8 @@
+[Unit]
+Description=Update calienfriito-utec.duckdns.org with this VM's IP
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/duckdns-update.sh
