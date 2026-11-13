@@ -137,7 +137,7 @@ export function NodeSetup({ roomId }: { roomId: string }) {
         </div>
         <span className="text-xs text-slate-500">
           {board === 'pcb'
-            ? 'DHT11 en GPIO13, LED en 32/33/25, ventilador en 19; sin tacómetro ni calefactor.'
+            ? 'DHT11 en GPIO13, LED en 32/33/25, ventilador en 19; sin tacómetro.'
             : 'DHT22 en D4 y los pines del armado en protoboard.'}
         </span>
       </div>

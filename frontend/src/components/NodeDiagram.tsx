@@ -40,16 +40,13 @@ function parts(r: StoredReading | null | undefined) {
   const pwm = ns?.ventilador_pwm ?? null
   const pct = pwm == null ? null : Math.round((pwm / 255) * 100)
   const rpm = ns?.ventilador_rpm
-  const fan: Part = !ns ? unknown('Ventilador de PC', 'D25 · D33', 'Potencia por PWM, RPM por tacómetro')
-    : pct && pct >= 20 && rpm === 0
-      ? { name: 'Ventilador de PC', pin: 'D25 · D33', role: 'Potencia por PWM, RPM por tacómetro', health: 'fault', state: `Falla: 0 RPM con orden al ${pct} %` }
-      : { name: 'Ventilador de PC', pin: 'D25 · D33', role: 'Potencia por PWM, RPM por tacómetro', health: 'ok', on: !!pct,
-          state: pct ? `Al ${pct} %${rpm != null ? ` · ${rpm} RPM` : ''}` : 'Apagado' }
+  // The fan has 2 wires (no tachometer): it is switched by the HW-517, so 0 RPM is not a fault.
+  const fan: Part = !ns ? unknown('Ventilador 12 V', 'D25', 'Potencia por PWM (HW-517)')
+    : { name: 'Ventilador 12 V', pin: 'D25', role: 'Potencia por PWM (HW-517)', health: 'ok', on: !!pct,
+        state: pct ? `Al ${pct} %${rpm ? ` · ${rpm} RPM` : ''}` : 'Apagado' }
   const led = (ns?.led ?? '').split(' ')[0].toUpperCase()
   const actuators: Part[] = [
     fan,
-    !ns ? unknown('Calefactor PTC', 'D32', 'Encendido por MOSFET')
-      : { name: 'Calefactor PTC', pin: 'D32', role: 'Encendido por MOSFET', health: 'ok', on: !!ns.calefactor, state: ns.calefactor ? 'Encendido' : 'Apagado' },
     !ns ? unknown('Buzzer', 'D26', 'Alarma de CO')
       : { name: 'Buzzer', pin: 'D26', role: 'Alarma de CO', health: 'ok', on: !!ns.buzzer, state: ns.buzzer ? 'Sonando' : 'Apagado' },
     !ns ? unknown('LED RGB', 'D27 · D14 · D13', 'Estado del control')

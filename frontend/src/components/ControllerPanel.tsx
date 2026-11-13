@@ -22,8 +22,7 @@ const num = (n: number, dec = 1) => n.toLocaleString('es', { minimumFractionDigi
 const RULES: [string, string][] = [
   [`CO desde ${FW.coAlarm} ppm`, 'Alarma y ventilador al 100 %'],
   ['Aula vacía', 'Todo apagado'],
-  [`Bajo ${num(FW.heatOn)} °C`, 'Calefactor'],
-  [`${num(FW.heatOn)} – ${num(FW.coolOn)} °C`, 'En espera'],
+  [`Bajo ${num(FW.coolOn)} °C`, 'En espera'],
   [`${num(FW.coolOn)} – ${num(FW.fan75At)} °C`, 'Ventilador al 50 %'],
   [`${num(FW.fan75At)} – ${num(FW.fan100At)} °C`, 'Ventilador al 75 %'],
   [`Desde ${num(FW.fan100At)} °C`, 'Ventilador al 100 %'],

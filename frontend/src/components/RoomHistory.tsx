@@ -10,7 +10,7 @@ import DayNav from './DayNav'
 // "Historial" tab: what the room's node measured and did on one local day
 // (GET /sensors/rooms/{id}/history). Temperature, humidity, CO₂ and CO are stacked on the
 // same time axis with one synced cursor; each row shows its value at the cursor (or the
-// last one), and the fan's power and the heater's periods sit below.
+// last one), and the fan's power sits below.
 
 interface Point { t: string; temp: number; hum: number; co2: number | null; co: number; fan: number; heat: number }
 interface Interval { start: string; end: string | null; people?: number | null }
@@ -30,7 +30,6 @@ type Key = 'temp' | 'hum' | 'co2' | 'co'
 const HOUR = 3_600_000
 const LINE = '#38bdf8'
 const FAN_COLOR = '#38bdf8'
-const HEAT_COLOR = '#fb923c'
 const CLASS_FILL = '#94a3b8'
 const POLL_MS = 30_000
 const Y_WIDTH = 46
@@ -114,9 +113,6 @@ export default function RoomHistory({ roomId }: { roomId: string }) {
   const start = parseUtc(data.start).getTime(), end = parseUtc(data.end).getTime()
   const rows: Row[] = (data.series ?? []).map(p => ({ t: parseUtc(p.t).getTime(), temp: p.temp, hum: p.hum, co2: p.co2, co: p.co, fan: p.fan }))
   const classes = (data.classes ?? []).map(c => ({ from: parseUtc(c.start).getTime(), to: c.end ? parseUtc(c.end).getTime() : end }))
-  const heater = (data.heater ?? []).map(h => ({ from: parseUtc(h.start).getTime(), to: h.end ? parseUtc(h.end).getTime() : end }))
-  // A 5-min point counts as "heater on" if any heater period touches it.
-  const heaterOn = (t: number) => heater.some(h => h.from < t + 5 * 60_000 && h.to > t)
   // Fan periods at their real power level; a 5-min point shows the highest level it touches.
   const fanRuns = (data.fan ?? []).map(f => ({ from: parseUtc(f.start).getTime(), to: f.end ? parseUtc(f.end).getTime() : end, level: f.level }))
   const fanAt = (t: number) => Math.max(0, ...fanRuns.filter(f => f.from < t + 5 * 60_000 && f.to > t).map(f => f.level))
@@ -149,13 +145,12 @@ export default function RoomHistory({ roomId }: { roomId: string }) {
         </button>
       </div>
 
-      {/* The day in three numbers */}
-      <section className="surface grid shrink-0 grid-cols-1 gap-4 rounded-xl px-5 py-3 sm:grid-cols-3">
+      {/* The day in two numbers */}
+      <section className="surface grid shrink-0 grid-cols-1 gap-4 rounded-xl px-5 py-3 sm:grid-cols-2">
         <Stat label="Clase fuera del rango ideal"
           value={s && s.class_hours > 0 && s.pct_out_of_band != null ? `${fmt(s.pct_out_of_band, 1)} %` : '—'}
           detail={s && s.class_hours > 0 ? `${duration(s.out_of_band_hours)} de ${duration(s.class_hours)} de clase` : 'Sin clases este día'} />
         <Stat label="Ventilador encendido" value={s ? duration(s.fan_hours) : '—'} detail={s ? `${fmt(s.fan_kwh, s.fan_kwh < 1 ? 2 : 1)} kWh` : ''} />
-        <Stat label="Calefactor encendido" value={s ? duration(s.heater_hours) : '—'} detail={s ? `${fmt(s.heater_kwh, s.heater_kwh < 1 ? 2 : 1)} kWh` : ''} />
       </section>
 
       {/* Four magnitudes on one time axis, then what the actuators did */}
@@ -191,13 +186,13 @@ export default function RoomHistory({ roomId }: { roomId: string }) {
           )
         })}
 
-        {/* Fan: the power it ran at */}
+        {/* Fan: the power it ran at; this strip carries the hour axis */}
         <div className="grid grid-cols-[9rem_minmax(0,1fr)] items-center gap-3 pt-2">
           <span className="text-xs text-slate-400">Ventilador · <span className="text-slate-200">{focus ? (fanAt(focus.t) > 0 ? `${fanAt(focus.t)} %` : 'apagado') : '—'}</span></span>
-          <div className="h-12">
+          <div className="h-[72px]">
             <ResponsiveContainer width="100%" height="100%">
               <ComposedChart data={rows} syncId="history" margin={{ top: 4, right: 22, left: 4, bottom: 0 }} {...track}>
-                {xAxis(false)}
+                {xAxis(true)}
                 <YAxis domain={[0, 100]} allowDataOverflow ticks={[0, 100]} width={Y_WIDTH} tickFormatter={x => `${x}%`} {...AXIS} />
                 <Tooltip content={() => null} cursor={{ stroke: '#64748b', strokeDasharray: '3 3' }} />
                 {classAreas}
@@ -209,30 +204,11 @@ export default function RoomHistory({ roomId }: { roomId: string }) {
             </ResponsiveContainer>
           </div>
         </div>
-        {/* Heater: on or off, exact periods; this strip carries the hour axis */}
-        <div className="grid grid-cols-[9rem_minmax(0,1fr)] items-center gap-3">
-          <span className="text-xs text-slate-400">Calefactor · <span className="text-slate-200">{focus ? (heaterOn(focus.t) ? 'encendido' : 'apagado') : '—'}</span></span>
-          <div className="h-[60px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <ComposedChart data={rows} syncId="history" margin={{ top: 2, right: 22, left: 4, bottom: 0 }} {...track}>
-                {xAxis(true)}
-                <YAxis domain={[0, 1]} allowDataOverflow ticks={[0.5]} width={Y_WIDTH} tickFormatter={() => ''} axisLine={false} tickLine={false} {...{ tick: AXIS.tick }} />
-                <Tooltip content={() => null} cursor={{ stroke: '#64748b', strokeDasharray: '3 3' }} />
-                {heater.map(h => (
-                  <ReferenceArea key={h.from} x1={Math.max(h.from, start)} x2={Math.min(h.to, end)} y1={0.15} y2={0.85} fill={HEAT_COLOR} fillOpacity={0.75} stroke="none" />
-                ))}
-                <Line dataKey="temp" stroke="none" dot={false} activeDot={false} isAnimationActive={false} />
-              </ComposedChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1 pt-2 text-xs text-slate-400">
           <span className="tabular-nums text-slate-300">{focus ? `${hover != null ? 'Promedio de 5 min desde las' : 'Último promedio de 5 min, desde las'} ${clock(focus.t)}` : ''}</span>
           <span className="ml-auto flex items-center gap-1.5"><span className="h-2.5 w-3 rounded-sm" style={{ background: CLASS_FILL, opacity: 0.25 }} />Con estudiantes</span>
           <span className="flex items-center gap-1.5"><span className="w-3 border-t border-dashed border-slate-400" />Umbral de la regla</span>
           <span className="flex items-center gap-1.5"><span className="h-2.5 w-3 rounded-sm" style={{ background: FAN_COLOR, opacity: 0.5 }} />Potencia del ventilador</span>
-          <span className="flex items-center gap-1.5"><span className="h-2.5 w-3 rounded-sm" style={{ background: HEAT_COLOR, opacity: 0.75 }} />Calefactor encendido</span>
         </div>
       </section>
     </div>

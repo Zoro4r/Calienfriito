@@ -61,8 +61,7 @@ function equipment(r: RoomRow): string {
   if (!l || !r.fresh) return '—'
   const n = l.node_state
   if (n) {
-    if (n.alarma_co) return 'Ventilador al 100 %, calefactor apagado'
-    if (n.calefactor) return 'Calefactor encendido'
+    if (n.alarma_co) return 'Ventilador al 100 %'
     const fan = Math.round(((n.ventilador_pwm ?? 0) / 255) * 100)
     return fan > 0 ? `Ventilador al ${fan} %` : 'Apagados'
   }

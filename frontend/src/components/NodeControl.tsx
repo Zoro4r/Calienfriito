@@ -14,9 +14,8 @@ type Mode = 'fan' | 'heater' | 'off'
 interface Order { mode: Mode | 'auto'; minutes: number | null; level?: number | null; started_at: string | null; by: string | null }
 
 const OPTIONS: { mode: Mode; title: string; detail: string }[] = [
-  { mode: 'fan', title: 'Ventilar', detail: 'Ventilador al 100 %, calefactor apagado' },
-  { mode: 'heater', title: 'Calentar', detail: 'Calefactor encendido, ventilador apagado' },
-  { mode: 'off', title: 'Apagar ambos', detail: 'Aunque las reglas pidan encenderlos' },
+  { mode: 'fan', title: 'Ventilar', detail: 'Ventilador al 100 %' },
+  { mode: 'off', title: 'Apagar ventilador', detail: 'Aunque las reglas pidan encenderlo' },
 ]
 const DURATIONS = [5, 15, 30, 60]
 const LEVELS = [25, 50, 75, 100]      // fan power; a PC fan stalls below ~20 %
@@ -165,7 +164,7 @@ export default function NodeControl({ roomId, nodeState, stateAt, online, canCon
             {alarm ? 'Alarma de CO: manda la seguridad' : running ? `${active!.title}${activeMode === 'fan' ? ` al ${fanPct} %` : ''} · ${isPreview ? 'vista previa' : 'orden manual'}` : waiting ? 'Orden enviada, esperando al nodo' : 'Control automático'}
           </p>
           <p className="mt-1 text-xs text-slate-400">
-            {alarm ? 'Ventilador al 100 % y calefactor apagado hasta que baje el CO.'
+            {alarm ? 'Ventilador al 100 % hasta que baje el CO.'
               : running ? `${activeMode === 'fan' && rpm != null ? `${rpm.toLocaleString('es')} RPM · ` : ''}Vuelve a automático a las ${hhmm(ends)}${isPreview ? ' · no se envió al nodo' : order?.by ? ` · ordenado por ${order.by}` : ''}`
               : waiting ? 'Se aplicará en cuanto el nodo reciba la orden.'
               : 'El nodo decide según la temperatura y la ocupación.'}
@@ -206,7 +205,7 @@ export default function NodeControl({ roomId, nodeState, stateAt, online, canCon
               </span>
               <span>
                 <span className="block text-sm text-slate-100">{o.title}</span>
-                <span className="block text-xs text-slate-400">{o.mode === 'fan' ? `Ventilador al ${level} %, calefactor apagado` : o.detail}</span>
+                <span className="block text-xs text-slate-400">{o.mode === 'fan' ? `Ventilador al ${level} %` : o.detail}</span>
               </span>
             </button>
           ))}

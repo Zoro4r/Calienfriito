@@ -125,7 +125,6 @@ export function ControlStateCard({ node, className = '' }: { node: NodeState | n
 
 export function ActuatorsCard({ node, children, className = '' }: { node: NodeState | null | undefined; children?: ReactNode; className?: string }) {
   const fan = Math.round(((node?.ventilador_pwm ?? 0) / 255) * 100)
-  const heat = node?.calefactor ? 100 : 0
   const ledName = (node?.led ?? '').split(' ')[0].toUpperCase()
   const ledText = node?.led ? node.led.toLowerCase().replace(/^./, c => c.toUpperCase()) : '—'
   // One grid for every row: name · state (ON/OFF or the LED colour) · level, so the
@@ -145,7 +144,6 @@ export function ActuatorsCard({ node, children, className = '' }: { node: NodeSt
           <span className="text-slate-400">Velocidad</span>
           <span className="col-span-2 text-right tabular-nums text-slate-200">{node.ventilador_rpm.toLocaleString('es')} RPM</span>
         </>}
-        <Row label="Calefactor" on={heat > 0} tone="high" pct={heat} />
         <Row label="Buzzer" on={!!node?.buzzer} tone="alert" />
         <span className="text-slate-400">LED RGB</span>
         <span className="col-span-2 flex min-w-0 items-center gap-1.5">
