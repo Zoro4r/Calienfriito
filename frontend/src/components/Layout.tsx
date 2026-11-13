@@ -8,7 +8,6 @@ import {
 import axios from 'axios'
 import { useAuth } from '../context/AuthContext'
 import { useEmergency } from '../context/EmergencyContext'
-import FloatingChat from './FloatingChat'
 import Logo from './Logo'
 
 interface NavItem {
@@ -408,9 +407,9 @@ export default function Layout() {
         <Outlet />
       </main>
 
-      {/* ── Persistent emergency button (bottom-right, left of FloatingChat) ── */}
+      {/* ── Persistent emergency button (bottom-right) ── */}
       {isAnyVisible && (
-        <div className="fixed bottom-6 right-20 z-40 group">
+        <div className="fixed bottom-6 right-6 z-40 group">
           <button
             onClick={reopenPopup}
             className={`w-12 h-12 rounded-full text-white flex items-center justify-center animate-pulse shadow-lg transition-colors ${iconBg}`}
@@ -425,7 +424,6 @@ export default function Layout() {
         </div>
       )}
 
-      <FloatingChat />
     </div>
   )
 }
