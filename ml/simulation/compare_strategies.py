@@ -73,8 +73,9 @@ class Actuators:
     heater_w: float         # resistive heater: electric power = heat
 
 
-SIZED = Actuators("Equipo dimensionado para el aula (extractor 1800 m3/h, 180 W; calefactor 2 kW)", 0.5, 180.0, 2000.0)
-NODE = Actuators("Actuadores del nodo actual (ventilador 12 V 2.4 W; PTC 35 W)", 0.04, 2.4, 35.0)
+# No heater: it was left out of the project (future work), so neither strategy can heat.
+SIZED = Actuators("Equipo dimensionado para el aula (extractor 1800 m3/h, 180 W)", 0.5, 180.0, 0.0)
+NODE = Actuators("Ventilador del nodo actual (12 V, 2.4 W)", 0.04, 2.4, 0.0)
 
 
 def outdoor_temp(day_offset: float, hour: float) -> float:
@@ -219,6 +220,8 @@ def simulate(strategy, sc: dict, room: Room, act: Actuators, days: int) -> dict:
         t_meas = round(temp + sc["t_noise"][i], 1)
         co2_meas = co2 + sc["co2_noise"][i]
         fan, heat = strategy.decide(t_meas=t_meas, occupied=people > 0, now_s=i * STEP_S, tout=tout, co2_meas=co2_meas)
+        if act.heater_w <= 0:
+            heat = 0.0            # no heater installed: a "heat" decision does nothing
         flow = room.infiltration_m3s + fan * act.fan_max_m3s
         gains = people * room.person_sensible_w + (room.equipment_w if people > 0 else 0.0) + solar_gain(room, hour) + heat * act.heater_w
         losses = (room.ua_w_k + 1.2 * 1005 * fan * act.fan_max_m3s) * (temp - tout)
