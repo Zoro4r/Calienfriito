@@ -13,11 +13,11 @@ from __future__ import annotations
 from datetime import date, datetime, time, timedelta
 
 from app.config import LOCAL_UTC_OFFSET_HOURS
+from app.services.forecast_controller import HORIZON_MIN
 from app.services.learning_controller import BAND_HI, BAND_LO, NODE_FAN_MAX_W, NODE_HEATER_W
 
 # Bucket minutes per range: ~300–370 points per series.
 BUCKET_MIN = {"12h": 2, "1d": 5, "7d": 30, "30d": 120}
-NODE_OCCUPIED_ADC = 2200
 _OFFSET = timedelta(hours=LOCAL_UTC_OFFSET_HOURS)
 
 
@@ -58,6 +58,11 @@ def _out_of_band(temp_expr) -> dict:
     return {"$and": [{"$ne": [temp_expr, None]}, {"$or": [{"$lt": [temp_expr, BAND_LO]}, {"$gt": [temp_expr, BAND_HI]}]}]}
 
 
+def _hot(temp_expr) -> dict:
+    # Heat discomfort: above the band's top (the predictive controller's success metric).
+    return {"$and": [{"$ne": [temp_expr, None]}, {"$gt": [temp_expr, BAND_HI]}]}
+
+
 def _points(rows: list[dict]) -> list[dict]:
     return [{
         "t": r["_id"]["b"].strftime("%Y-%m-%dT%H:%M:%S"),
@@ -90,6 +95,8 @@ def _summary(s: dict | None, step_s: float, fan_w: float, heater_w: float, comfo
         return None
     return {
         "pct_out_of_band": round(100 * s["out"] / s["occ"], 1) if comfort and s.get("occ") else None,
+        "pct_hot": round(100 * s.get("hot", 0) / s["occ"], 1) if comfort and s.get("occ") else None,
+        "hot_hours": round(s.get("hot", 0) * step_s / 3600, 2) if comfort else None,
         "occupied_hours": round(s.get("occ", 0) * step_s / 3600, 1),
         "kwh": round((fan_w * s["fan3"] + heater_w * s["heat"]) * step_s / 3600 / 1000, 2),
     }
@@ -113,6 +120,7 @@ async def simulation_series(db, room_id: str, meta: dict, range_key: str, anchor
             "_id": "$strategy",
             "occ": {"$sum": {"$cond": ["$occupied", 1, 0]}},
             "out": {"$sum": {"$cond": [{"$and": ["$occupied", _out_of_band("$temperature")]}, 1, 0]}},
+            "hot": {"$sum": {"$cond": [{"$and": ["$occupied", _hot("$temperature")]}, 1, 0]}},
             "fan3": {"$sum": {"$pow": ["$fan", 3]}},
             "heat": {"$sum": "$heat"},
         }},
@@ -154,7 +162,7 @@ async def live_series(db, sensors: list[str], range_key: str, anchor: date | Non
     ts = {"$toDate": {"$substrBytes": ["$timestamp", 0, 19]}}
     fan = {"$divide": [{"$ifNull": ["$node_state.ventilador_pwm", 0]}, 255]}
     heat = {"$cond": ["$node_state.calefactor", 1, 0]}
-    occupied = {"$gte": [{"$ifNull": ["$node_state.co2_proxy", 0]}, NODE_OCCUPIED_ADC]}
+    occupied = {"$ne": ["$node_state.accion", "DISABLED"]}   # the firmware's own occupancy decision
     rows = await db["sensor_readings"].aggregate([
         {"$match": match},
         {"$group": {
@@ -162,6 +170,7 @@ async def live_series(db, sensors: list[str], range_key: str, anchor: date | Non
             "temp": {"$avg": "$temperature"}, "fan": {"$avg": fan}, "heat": {"$avg": heat},
             "lfan": {"$avg": {"$divide": ["$learning_action.fan_pct", 100]}},
             "lheat": {"$avg": {"$divide": ["$learning_action.heater_pct", 100]}},
+            "pred": {"$avg": "$learning_action.forecast_30"},
         }},
         {"$sort": {"_id.b": 1}},
     ]).to_list(length=None)
@@ -171,6 +180,7 @@ async def live_series(db, sensors: list[str], range_key: str, anchor: date | Non
             "_id": None, "n": {"$sum": 1},
             "occ": {"$sum": {"$cond": [occupied, 1, 0]}},
             "out": {"$sum": {"$cond": [{"$and": [occupied, _out_of_band("$temperature")]}, 1, 0]}},
+            "hot": {"$sum": {"$cond": [{"$and": [occupied, _hot("$temperature")]}, 1, 0]}},
             "fan3": {"$sum": {"$pow": [fan, 3]}}, "heat": {"$sum": heat},
             "lfan3": {"$sum": {"$pow": [{"$divide": [{"$ifNull": ["$learning_action.fan_pct", 0]}, 100]}, 3]}},
             "lheat": {"$sum": {"$divide": [{"$ifNull": ["$learning_action.heater_pct", 0]}, 100]}},
@@ -194,7 +204,38 @@ async def live_series(db, sensors: list[str], range_key: str, anchor: date | Non
         **_frame(range_key, start, end, anchor, data_start, data_end),
         "occupancy": _intervals(minutes),
         "rules": {"points": _points(rows), "summary": _summary(t, step_s, NODE_FAN_MAX_W, NODE_HEATER_W)},
+        "forecast": forecast_accuracy(rows, bucket_min),
         "learning": {"points": _points(learn_rows),
                      "summary": _summary(t and {"fan3": t["lfan3"], "heat": t["lheat"], "occ": t["occ"]},
                                          step_s, NODE_FAN_MAX_W, NODE_HEATER_W, comfort=False)},
+    }
+
+
+def forecast_accuracy(rows: list[dict], bucket_min: int) -> dict | None:
+    """How well the 30-min forecasts matched what the room then measured.
+
+    Each bucket's mean forecast is compared with the measured temperature HORIZON_MIN
+    later. The persistence baseline ("it stays as it is now") is scored on the same
+    pairs, so the pretrained model's value is measured, not assumed.
+    """
+    if HORIZON_MIN % bucket_min:
+        return None                                   # buckets too coarse to shift by the horizon
+    temp = {r["_id"]["b"]: r.get("temp") for r in rows}
+    shift = timedelta(minutes=HORIZON_MIN)
+    points, err, err_base = [], [], []
+    for r in rows:
+        b, pred = r["_id"]["b"], r.get("pred")
+        if pred is None:
+            continue
+        points.append({"t": (b + shift).strftime("%Y-%m-%dT%H:%M:%S"), "pred": round(pred, 2)})
+        actual, now = temp.get(b + shift), temp.get(b)
+        if actual is not None and now is not None:
+            err.append(abs(pred - actual))
+            err_base.append(abs(now - actual))
+    return {
+        "horizon_min": HORIZON_MIN,
+        "points": points,
+        "pairs": len(err),
+        "mae": round(sum(err) / len(err), 2) if err else None,
+        "mae_baseline": round(sum(err_base) / len(err_base), 2) if err_base else None,
     }

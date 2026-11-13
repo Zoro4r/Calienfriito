@@ -20,7 +20,6 @@ OFFSET = timedelta(hours=LOCAL_UTC_OFFSET_HOURS)
 BUCKET_MIN = 5
 MAX_GAP_S = 60.0
 GAP_EVENT_S = 300.0                 # a silence this long is reported as "sin datos"
-NODE_OCCUPIED_ADC = 2200
 FMT = "%Y-%m-%dT%H:%M:%S"
 
 PROJECTION = {
@@ -60,7 +59,7 @@ def summarize_day(docs: list[dict], fan_max_w: float, heater_w: float) -> dict:
         dt = min(gap, MAX_GAP_S)
         fan = (ns.get("ventilador_pwm") or 0) / 255
         heat = 1.0 if ns.get("calefactor") else 0.0
-        occupied = (ns.get("co2_proxy") or 0) >= NODE_OCCUPIED_ADC
+        occupied = ns.get("accion") not in (None, "DISABLED")   # the firmware's own occupancy decision
         temp = d.get("temperature")
 
         # 5-minute series

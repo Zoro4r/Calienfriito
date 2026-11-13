@@ -7,7 +7,8 @@ from app.services.room_history import summarize_day
 def reading(ts, temp=24.0, accion="STANDBY", fan=0, heat=False, occupied=True, manual=False, alarm=False, co=2.0):
     return {
         "timestamp": ts.strftime("%Y-%m-%dT%H:%M:%S.000000"), "temperature": temp, "humidity": 55, "co2_ppm": 800, "co_ppm": co,
-        "node_state": {"accion": accion, "ventilador_pwm": fan, "calefactor": heat, "co2_proxy": 2900 if occupied else 1500,
+        "node_state": {"accion": accion if occupied else "DISABLED",   # the firmware disables an empty room
+                       "ventilador_pwm": fan, "calefactor": heat, "co2_proxy": 2900 if occupied else 1500,
                        "manual": manual, "alarma_co": alarm, "motivo": "x"},
     }
 
