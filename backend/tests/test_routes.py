@@ -162,6 +162,20 @@ def test_admin_publishes_node_settings(as_role, monkeypatch):
     assert sent == [("B101", {"umbral_ocupacion": 260})]
 
 
+def test_collaborator_cannot_add_classes(as_role):
+    as_role("collaborator")
+    r = client.post("/api/v1/admin/rooms/B101/schedules",
+                    json={"day_of_week": 0, "start_time": "08:00", "end_time": "10:00", "expected_people": 20})
+    assert r.status_code == 403
+
+
+def test_class_payload_is_validated(as_role):
+    as_role("admin")
+    r = client.post("/api/v1/admin/rooms/B101/schedules",
+                    json={"day_of_week": 6, "start_time": "8:00", "end_time": "10:00", "expected_people": 0})
+    assert r.status_code == 422
+
+
 def test_sensor_ingest_rejects_wrong_api_key(monkeypatch):
     monkeypatch.setattr(deps, "WATSON_EXTENSION_KEY", "expected-key")
     res = client.post("/api/v1/sensors/", json={}, headers={"X-API-Key": "wrong"})

@@ -8,7 +8,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import PlainTextResponse
 from motor.motor_asyncio import AsyncIOMotorDatabase
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
 from starlette.concurrency import run_in_threadpool
@@ -879,6 +879,7 @@ async def reservations_occupancy(
 
 
 class ScheduleOut(BaseModel):
+    id: Optional[int] = None
     day_of_week: int   # 0=Monday … 6=Sunday
     start_time: str    # HH:MM local
     end_time: str
@@ -897,6 +898,7 @@ def room_schedules(
         .order_by(Schedule.day_of_week, Schedule.start_time).all()
     )
     return [{
+        "id": s.id,
         "day_of_week": s.day_of_week,
         "start_time": s.start_time.strftime("%H:%M"),
         "end_time": s.end_time.strftime("%H:%M"),
@@ -904,7 +906,61 @@ def room_schedules(
     } for s in rows]
 
 
+class ScheduleIn(BaseModel):
+    day_of_week: int = Field(..., ge=0, le=5)                          # 0=Monday … 5=Saturday
+    start_time: str = Field(..., pattern=r"^([01]\d|2[0-3]):[0-5]\d$")  # HH:MM local
+    end_time: str = Field(..., pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    expected_people: int = Field(..., ge=1, le=1000)
+
+
+@router.post("/rooms/{room_id}/schedules", status_code=201, response_model=ScheduleOut,
+             responses={403: {"model": ErrorDetail}, 404: {"model": ErrorDetail}, 409: {"model": ErrorDetail}})
+def add_room_schedule(
+    room_id: str,
+    payload: ScheduleIn,
+    db: Session = Depends(get_db_sql),
+    current_user: User = Depends(get_current_user),
+):
+    """Add a weekly class to a room (admins). 409 if it overlaps another class or exceeds capacity."""
+    from app.services.week_schedule import class_problem
+    _require_admin(current_user)
+    room = db.query(Room).filter(Room.id == room_id).first()
+    if not room:
+        raise HTTPException(status_code=404, detail="Aula no encontrada.")
+    start = datetime.strptime(payload.start_time, "%H:%M").time()
+    end = datetime.strptime(payload.end_time, "%H:%M").time()
+    existing = db.query(Schedule).filter(Schedule.room_id == room_id).all()
+    problem = class_problem(payload.day_of_week, start, end, payload.expected_people, room.max_capacity, existing)
+    if problem:
+        raise HTTPException(status_code=409, detail=problem)
+    row = Schedule(room_id=room_id, day_of_week=payload.day_of_week, start_time=start,
+                   end_time=end, expected_people=payload.expected_people)
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return {"id": row.id, "day_of_week": row.day_of_week, "start_time": payload.start_time,
+            "end_time": payload.end_time, "expected_people": row.expected_people}
+
+
+@router.delete("/rooms/{room_id}/schedules/{schedule_id}", status_code=204,
+               responses={403: {"model": ErrorDetail}, 404: {"model": ErrorDetail}})
+def delete_room_schedule(
+    room_id: str,
+    schedule_id: int,
+    db: Session = Depends(get_db_sql),
+    current_user: User = Depends(get_current_user),
+):
+    """Remove one weekly class from a room (admins)."""
+    _require_admin(current_user)
+    row = db.query(Schedule).filter(Schedule.id == schedule_id, Schedule.room_id == room_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Clase no encontrada.")
+    db.delete(row)
+    db.commit()
+
+
 class WeekBlockOut(BaseModel):
+    id: Optional[int] = None   # the class id (classes only), to delete it
     room_id: str
     day: int             # 0=Monday … 6=Sunday
     start: str           # HH:MM local

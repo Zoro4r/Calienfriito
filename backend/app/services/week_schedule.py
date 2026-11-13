@@ -25,7 +25,7 @@ def build_week(schedules: Iterable, reservations: Iterable, monday: date, show_u
     crosses midnight is cut at the end of its first day.
     """
     blocks = [{
-        "room_id": s.room_id, "day": s.day_of_week,
+        "id": getattr(s, "id", None), "room_id": s.room_id, "day": s.day_of_week,
         "start": _hm(s.start_time), "end": _hm(s.end_time),
         "kind": "class", "people": s.expected_people, "by": None,
     } for s in schedules]
@@ -43,3 +43,23 @@ def build_week(schedules: Iterable, reservations: Iterable, monday: date, show_u
         })
     blocks.sort(key=lambda b: (b["day"], b["start"], b["room_id"]))
     return blocks
+
+
+def class_problem(day: int, start: time, end: time, people: int, capacity: int | None, existing: Iterable) -> str | None:
+    """Why a new weekly class cannot be added, in user language, or None if it can.
+
+    `existing` are the room's current classes (day_of_week, start_time, end_time).
+    Classes run Monday (0) to Saturday (5); two classes of a room cannot overlap.
+    """
+    if not 0 <= day <= 5:
+        return "Las clases van de lunes a sábado."
+    if end <= start:
+        return "La hora de fin debe ser posterior a la de inicio."
+    if people < 1:
+        return "Indica cuántas personas se esperan."
+    if capacity and people > capacity:
+        return f"El aula tiene capacidad para {capacity} personas."
+    for c in existing:
+        if c.day_of_week == day and c.start_time < end and start < c.end_time:
+            return f"Se cruza con la clase de {_hm(c.start_time)} a {_hm(c.end_time)}."
+    return None
