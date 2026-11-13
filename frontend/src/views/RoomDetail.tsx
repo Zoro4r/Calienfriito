@@ -100,6 +100,7 @@ export default function RoomDetail({ roomId, embeddedTab }: { roomId?: string; e
   const [schedules, setSchedules] = useState<WeeklySlot[]>([])
   const [upcoming, setUpcoming] = useState<RoomReservation[]>([])
   const [loading, setLoading] = useState(true)
+  const [readingsReady, setReadingsReady] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [controlError, setControlError] = useState<string | null>(null)
   const [policySaving, setPolicySaving] = useState(false)
@@ -132,12 +133,15 @@ export default function RoomDetail({ roomId, embeddedTab }: { roomId?: string; e
   }, [id])
 
   // Readings: a first load, then only what is newer than the newest one we have.
+  // Only the live tab draws charts: the other tabs need just the latest reading, so they load fast.
+  const fullHistory = tab === 'vivo'
   const newestRef = useRef<string | null>(null)
   useEffect(() => {
     if (!id) return
     let cancelled = false
     newestRef.current = null
-    const initial = () => api.get<StoredReading[]>(`/sensors/?room_id=${id}&limit=${READINGS_LIMIT}`)
+    setReadingsReady(false)
+    const initial = () => api.get<StoredReading[]>(`/sensors/?room_id=${id}&limit=${fullHistory ? READINGS_LIMIT : 60}`)
       .then(r => {
         if (cancelled) return
         const d = r.data ?? []
@@ -159,10 +163,10 @@ export default function RoomDetail({ roomId, embeddedTab }: { roomId?: string; e
           setNow(Date.now())
         })
     }
-    initial().catch(() => {})
+    initial().catch(() => {}).finally(() => { if (!cancelled) setReadingsReady(true) })
     const t = setInterval(() => { poll().catch(() => {}) }, POLL_MS)
     return () => { cancelled = true; clearInterval(t) }
-  }, [id])
+  }, [id, fullHistory])
   const [win, setWin] = useState<Win>('15')
   // Rooms without a node only have sparse readings: show everything loaded by default.
   const sawNode = readings.some(r => r.node_state?.accion)
@@ -231,7 +235,8 @@ export default function RoomDetail({ roomId, embeddedTab }: { roomId?: string; e
 
 
 
-  if (loading) {
+  // Until the first readings arrive, show nothing about the node: no 'Sin lecturas' or 'waiting' flash.
+  if (loading || !readingsReady) {
     return <p className="flex items-center justify-center gap-2 py-12 text-sm text-slate-400"><RefreshCw size={14} className="animate-spin" /> Cargando aula…</p>
   }
 
