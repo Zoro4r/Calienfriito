@@ -443,9 +443,9 @@ async def room_strategies(
     `date` (local, YYYY-MM-DD) picks the day, its week or its month; without it, the
     period holding the latest data. Periods follow the local calendar.
 
-    `auto` uses the room's strategy simulation when one exists (both strategies with
-    their own temperature) and the node's live readings otherwise (rules + the
-    learning controller's shadow decisions).
+    `auto` uses the node's live readings when the room has a real node (rules + the
+    predictive controller's shadow decisions), and otherwise the room's strategy
+    simulation if one exists (both strategies with their own temperature).
     """
     from datetime import date as date_cls
     from app.services.strategy_series import live_series, simulation_series
@@ -454,11 +454,13 @@ async def room_strategies(
 
     try:
         meta = await db["strategy_simulation_meta"].find_one({"_id": room_id})
-        if meta and source != "live":
-            return await simulation_series(db, room_id, meta, range_key, anchor)
         sensors = await run_in_threadpool(
             lambda: [d.id for d in db_sql.query(SensorDevice).filter(SensorDevice.room_id == room_id).all()]
         )
+        real_node = bool(sensors) and await db["sensor_readings"].find_one(
+            {"sensor_id": {"$in": sensors}, "is_simulated": False, "node_state.accion": {"$exists": True}}, {"_id": 1})
+        if meta and (source == "simulation" or (source == "auto" and not real_node)):
+            return await simulation_series(db, room_id, meta, range_key, anchor)
         data = await live_series(db, sensors, range_key, anchor) if sensors else None
     except PyMongoError as exc:
         logger.error("MongoDB unavailable: %s", exc)
