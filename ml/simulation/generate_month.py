@@ -108,6 +108,8 @@ def main() -> None:
     parser.add_argument("--room", required=True)
     parser.add_argument("--days", type=int, default=30)
     parser.add_argument("--seed", type=int, default=7)
+    parser.add_argument("--no-readings", action="store_true",
+                        help="only the strategy simulation (Rentabilidad); leave the room's readings untouched (real nodes)")
     parser.add_argument("--every", type=int, default=1,
                         help="write one row every N simulation steps (the simulation itself keeps its step)")
     args = parser.parse_args()
@@ -129,7 +131,8 @@ def main() -> None:
     learn_log = cs.simulate(cs.Predictive(act, expected=sc["expected"]), sc, room, act, args.days)
 
     db = MongoClient(MONGO_URI)["climate_db"]
-    db["sensor_readings"].delete_many({"sensor_id": sensor_id, "demo_seed": True})
+    if not args.no_readings:
+        db["sensor_readings"].delete_many({"sensor_id": sensor_id, "demo_seed": True})
     db["strategy_simulation"].delete_many({"room_id": room_id})
     db["learning_state"].delete_many({"_id": room_id})
     db["strategy_simulation"].create_index([("room_id", 1), ("strategy", 1), ("ts", 1)])
@@ -159,12 +162,16 @@ def main() -> None:
                 "fan": round(float(log["fan"][i]), 3), "heat": round(float(log["heat"][i]), 3),
                 "occupied": occupied, "people": int(sc["people"][i]),
             })
-        if len(readings) >= 5000:
-            db["sensor_readings"].insert_many(readings)
+        if args.no_readings:
+            readings = []
+        if len(sims) >= 10000:
+            if readings:
+                db["sensor_readings"].insert_many(readings)
             db["strategy_simulation"].insert_many(sims)
             readings, sims = [], []
     if readings:
         db["sensor_readings"].insert_many(readings)
+    if sims:
         db["strategy_simulation"].insert_many(sims)
 
     db["strategy_simulation_meta"].replace_one({"_id": room_id}, {
@@ -180,9 +187,9 @@ def main() -> None:
     }, upsert=True)
 
     w = cs.WARMUP_DAYS * STEPS_PER_DAY
-    for name, log in (("Reglas", rules_log), ("Aprendizaje", learn_log)):
+    for name, log in (("Reglas", rules_log), ("Predictivo", learn_log)):
         m = cs.metrics(log, sc, act, w, n)
-        print(f"{name:12} fuera de banda {m['pct_time_out_of_band']:5} %   energía {m['total_kwh']:7} kWh")
+        print(f"{name:12} clase sobre 24,5 °C {m['min_hot_class']:6} min   energía {m['total_kwh']:7} kWh")
     print(f"{n} pasos de {STEP} s desde {start_local} (hora local) para {room_id}")
 
 
