@@ -1,40 +1,32 @@
-from app.services.profitability import reference_kwh, strategy_kwh
+"""Rentabilidad: fan hours with the system against the fan always on (building day)."""
+from datetime import datetime, timedelta
+
+from app.services.profitability import fan_usage, in_building_day
 
 STEP = 1800  # half an hour per row keeps the arithmetic readable
+MONDAY_8_LOCAL = datetime(2026, 11, 9, 13, 0)       # 08:00 in Lima (UTC−5)
 
 
-def row(occupied=False, temperature=25.0, fan=0.0, heat=0.0):
-    return {"occupied": occupied, "temperature": temperature, "fan": fan, "heat": heat}
+def row(ts, fan=0.0, occupied=False):
+    return {"ts": ts, "fan": fan, "occupied": occupied}
 
 
-def test_strategy_kwh_uses_fan_cube_and_heater_duty():
-    rows = [row(fan=0.5), row(heat=1.0)]
-    # fan: 180 W · 0.125 · 0.5 h = 11.25 Wh; heater: 2000 W · 0.5 h = 1000 Wh
-    assert abs(strategy_kwh(rows, STEP, 180, 2000) - 1.01125) < 1e-9
+def test_building_day_is_7_to_22_monday_to_saturday():
+    assert in_building_day(MONDAY_8_LOCAL)
+    assert not in_building_day(datetime(2026, 11, 9, 11, 0))          # 06:00 local
+    assert not in_building_day(datetime(2026, 11, 10, 3, 30))         # 22:30 local, Monday
+    assert not in_building_day(datetime(2026, 11, 15, 15, 0))         # Sunday
 
 
-def test_reference_runs_extractor_for_a_warm_class():
-    rows = [row(), row(occupied=True), row(occupied=True), row()]
-    kwh, hours = reference_kwh(rows, STEP, 180, 2000)
-    assert hours == 1.0
-    assert abs(kwh - 0.18) < 1e-9
-
-
-def test_reference_runs_heater_when_class_starts_cold():
-    # Only the temperature at the start of the class decides the equipment.
-    rows = [row(occupied=True, temperature=20.0), row(occupied=True, temperature=26.0)]
-    kwh, hours = reference_kwh(rows, STEP, 180, 2000)
-    assert hours == 1.0
-    assert abs(kwh - 2.0) < 1e-9
-
-
-def test_reference_counts_each_class_apart():
-    rows = [row(occupied=True, temperature=20.0), row(), row(occupied=True)]
-    kwh, hours = reference_kwh(rows, STEP, 180, 2000)
-    assert hours == 1.0
-    assert abs(kwh - (1.0 + 0.09)) < 1e-9
+def test_fan_usage_counts_on_hours_and_cube_energy():
+    rows = [row(MONDAY_8_LOCAL + timedelta(seconds=STEP * k), fan=f, occupied=f > 0)
+            for k, f in enumerate([0.0, 0.5, 1.0, 0.0])]
+    u = fan_usage(rows, STEP)
+    assert u["on_hours"] == 1.0                      # two half hours on
+    assert abs(u["eq_hours"] - (0.125 + 1.0) * 0.5) < 1e-9
+    assert u["reference_hours"] == 2.0               # always on: the four rows are in the building day
+    assert u["class_hours"] == 1.0
 
 
 def test_empty_simulation_gives_zero():
-    assert reference_kwh([], STEP, 180, 2000) == (0.0, 0.0)
-    assert strategy_kwh([], STEP, 180, 2000) == 0.0
+    assert fan_usage([], STEP) == {"on_hours": 0.0, "eq_hours": 0.0, "reference_hours": 0.0, "class_hours": 0.0}
