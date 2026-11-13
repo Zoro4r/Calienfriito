@@ -131,7 +131,7 @@ const unsigned long MIN_ON_MS         = 60000UL; // intervalo minimo on/off
 const float HR_ALTA_PCT               = 60.0;    // HR >= 60 %  -> HUMEDO
 const float HR_BAJA_PCT               = 40.0;    // HR <= 40 %  -> SECO
 const int CO_ALARM_PPM                = 50;      // umbral de alarma de CO
-const int OCCUPANCY_ADC_THRESHOLD     = 300;     // AJUSTA: entre el MQ-135 sin nadie y soplando (mira el CICLO)
+const int OCCUPANCY_ADC_THRESHOLD     = 260;     // AJUSTA: con el MQ-135 del protoboard: ~230 vacio y ~280 soplando (mira el CICLO)
 // Conversion SIMULADA del MQ-135 a ppm de CO2 (lineal, 0-4095 -> 400-2000 ppm) para
 // el backend, que estima la ocupacion como (CO2 - 420) / 25 personas. En hardware
 // real se reemplaza por la calibracion en dos puntos (aula vacia / aula llena).
