@@ -36,19 +36,26 @@ def in_building_day(ts_utc: datetime) -> bool:
 
 def fan_usage(rows: list[dict], step_s: float) -> dict:
     """Hours the fan ran, its full-power-equivalent hours, the reference hours (building
-    day) and the class hours, for one strategy's rows ({ts, fan, occupied})."""
+    day) and the class hours, for one strategy's rows ({ts, fan, occupied}); plus the
+    full-power hours of both per local hour of the day (for "un día típico")."""
     h = step_s / 3600
     on = eq = ref = cls = 0.0
+    eq_by_hour, ref_by_hour = [0.0] * 24, [0.0] * 24
     for r in rows:
         fan = r.get("fan") or 0.0
+        hour = (r["ts"] + _OFFSET).hour if r.get("ts") is not None else None
         if fan > ON_LEVEL:
             on += h
         eq += fan ** 3 * h
+        if hour is not None:
+            eq_by_hour[hour] += fan ** 3 * h
         if r.get("ts") is not None and in_building_day(r["ts"]):
             ref += h
+            ref_by_hour[hour] += h
         if r.get("occupied"):
             cls += h
-    return {"on_hours": on, "eq_hours": eq, "reference_hours": ref, "class_hours": cls}
+    return {"on_hours": on, "eq_hours": eq, "reference_hours": ref, "class_hours": cls,
+            "eq_by_hour": eq_by_hour, "ref_by_hour": ref_by_hour}
 
 
 async def _room_strategy(db, meta: dict, strategy: str) -> dict:
@@ -73,6 +80,7 @@ async def room_usage(db, meta: dict) -> dict:
     rules = await _room_strategy(db, meta, "rules")
     learning = await _room_strategy(db, meta, "learning")
     r1 = lambda x: round(x * scale, 1)  # noqa: E731
+    per_day = lambda xs: [round(x / days, 4) for x in xs]  # noqa: E731   average day
     return {
         "room_id": meta["_id"],
         "copied_from": meta.get("copied_from"),
@@ -83,4 +91,8 @@ async def room_usage(db, meta: dict) -> dict:
         "rules_eq_hours": r1(rules["eq_hours"]),
         "learning_hours": r1(learning["on_hours"]),
         "learning_eq_hours": r1(learning["eq_hours"]),
+        # Full-power hours per local hour of an average day (× fan kW = kWh in that hour).
+        "day_reference": per_day(rules["ref_by_hour"]),
+        "day_rules": per_day(rules["eq_by_hour"]),
+        "day_learning": per_day(learning["eq_by_hour"]),
     }

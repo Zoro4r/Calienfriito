@@ -26,7 +26,10 @@ def test_fan_usage_counts_on_hours_and_cube_energy():
     assert abs(u["eq_hours"] - (0.125 + 1.0) * 0.5) < 1e-9
     assert u["reference_hours"] == 2.0               # always on: the four rows are in the building day
     assert u["class_hours"] == 1.0
+    assert u["ref_by_hour"][8] == 1.0 and u["ref_by_hour"][9] == 1.0     # 08:00–10:00 local
+    assert abs(u["eq_by_hour"][8] - 0.0625) < 1e-9 and u["eq_by_hour"][9] == 0.5
 
 
 def test_empty_simulation_gives_zero():
-    assert fan_usage([], STEP) == {"on_hours": 0.0, "eq_hours": 0.0, "reference_hours": 0.0, "class_hours": 0.0}
+    u = fan_usage([], STEP)
+    assert (u["on_hours"], u["eq_hours"], u["reference_hours"], u["class_hours"]) == (0.0, 0.0, 0.0, 0.0)
