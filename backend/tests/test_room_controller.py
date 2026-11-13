@@ -56,8 +56,8 @@ def run(coro):
 def test_decision_maps_to_one_actuator():
     assert rc.order_for({"fan_pct": 0, "heater_pct": 100}) == ("heater", 100)
     assert rc.order_for({"fan_pct": 63.4, "heater_pct": 0}) == ("fan", 63)
-    assert rc.order_for({"fan_pct": 10, "heater_pct": 0}) == ("off", 100)    # PC fans stall below 20 %
-    assert rc.order_for({}) == ("off", 100)
+    assert rc.order_for({"fan_pct": 10, "heater_pct": 0}) == ("auto", 100)   # nothing to anticipate: the rules decide
+    assert rc.order_for({}) == ("auto", 100)
 
 
 def test_rooms_default_to_rules():

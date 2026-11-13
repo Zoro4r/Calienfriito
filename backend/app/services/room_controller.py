@@ -35,10 +35,11 @@ def remember_action(room_id: str, at: datetime, action: dict) -> None:
 
 
 def order_for(action: dict) -> tuple[str, int]:
-    """Manual order (mode, fan level) that reproduces a learning decision.
+    """Manual order (mode, fan level) that reproduces a predictive decision.
 
-    The node runs one actuator at a time: heat wins when asked for, otherwise the fan
-    at the requested power (PC fans stall under 20 %), otherwise everything off.
+    The fan at the requested power when the controller wants it on; otherwise "auto":
+    nothing to anticipate, so the node's own rules decide (they still cool and keep the
+    CO alarm). Fans stall under 20 %.
     """
     fan = float(action.get("fan_pct") or 0)
     heat = float(action.get("heater_pct") or 0)
@@ -46,7 +47,7 @@ def order_for(action: dict) -> tuple[str, int]:
         return "heater", 100
     if fan >= 20:
         return "fan", int(min(100, round(fan)))
-    return "off", 100
+    return "auto", 100
 
 
 async def get_controller(db, room_id: str) -> dict:
@@ -80,7 +81,7 @@ async def send_learning_order(db, room_id: str, now: datetime | None = None) -> 
     command = override_command(mode, ORDER_MINUTES, ORDER_BY, level)
     await publish_command(room_id, command)
     order = {
-        "_id": room_id, "mode": mode, "minutes": ORDER_MINUTES,
+        "_id": room_id, "mode": mode, "minutes": None if mode == "auto" else ORDER_MINUTES,
         "level": level if mode == "fan" else None,
         "started_at": now.strftime("%Y-%m-%dT%H:%M:%S"), "by": ORDER_BY,
     }

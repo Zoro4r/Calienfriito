@@ -26,6 +26,9 @@ pandas>=2.1
 # break. Bump ONLY together with a retrain (ml/pipeline/train_model.py).
 scikit-learn==1.8.0
 joblib>=1.3
+# Pretrained time-series forecaster (Amazon Chronos-Bolt, Apache 2.0). torch comes from
+# the CPU-only index in the Dockerfile.
+chronos-forecasting>=1.5,<3
 
 # --- IBM Watson Assistant ---
 ibm-watson>=7.0.0

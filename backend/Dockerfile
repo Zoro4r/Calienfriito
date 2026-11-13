@@ -2,8 +2,16 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
+# Pretrained forecaster (Amazon Chronos-Bolt) runs on CPU: install the CPU-only torch
+# wheel first so chronos-forecasting does not pull the much larger CUDA build.
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
+
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+
+# Bake the model weights into the image: no download when the backend starts.
+ENV HF_HOME=/opt/hf
+RUN python -c "from chronos import BaseChronosPipeline; BaseChronosPipeline.from_pretrained('amazon/chronos-bolt-small', device_map='cpu')"
 
 COPY . .
 

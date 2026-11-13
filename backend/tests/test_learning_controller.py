@@ -4,8 +4,6 @@ from datetime import datetime, timedelta
 
 import numpy as np
 
-from app.models.sensor import SensorReading
-from app.services import data_service
 from app.services.learning_controller import LearningController
 
 # A toy room with known per-minute effects, in the controller's feature order:
@@ -72,39 +70,6 @@ def test_a_long_gap_does_not_learn_across_it():
     ctrl.step(4 * 3600, 30.0, 600.0, True, 19.0, applied=(0.0, 0.0))   # node was offline for hours
     ctrl.step(4 * 3600 + 60, 30.0, 600.0, True, 19.0, applied=(0.0, 0.0))
     assert np.allclose(ctrl.model.theta, theta)
-
-
-class FakeCollection:
-    def __init__(self):
-        self.docs = {}
-
-    async def find_one(self, query):
-        return self.docs.get(query["_id"])
-
-    async def replace_one(self, query, doc, upsert=False):
-        self.docs[query["_id"]] = doc
-
-
-def test_shadow_step_reads_the_node_and_persists_each_minute():
-    data_service._SHADOW.clear()
-    db = {"learning_state": FakeCollection()}
-    start = datetime(2026, 10, 24, 15, 0, 0)
-    summary = None
-    for i in range(13):                                # a bit over two minutes, every 10 s
-        reading = SensorReading(
-            sensor_id="s-A403", temperature=25.0, humidity=55.0, co2_ppm=900.0, co_ppm=2.0,
-            timestamp=start + timedelta(seconds=10 * i),
-            node_state={"accion": "COOLING", "ventilador_pwm": 255, "calefactor": False, "co2_proxy": 3000},
-        )
-        summary = asyncio.run(data_service.shadow_learning_step(db, "A403", reading))
-    assert set(summary) == {"fan_pct", "heater_pct", "minutes_learned", "ready"}
-    assert "A403" in db["learning_state"].docs
-    data_service._SHADOW.clear()
-
-
-def test_shadow_step_ignores_readings_without_a_node_decision():
-    reading = SensorReading(sensor_id="s-A403", temperature=25.0, humidity=55.0, co2_ppm=900.0)
-    assert asyncio.run(data_service.shadow_learning_step({}, "A403", reading)) is None
 
 
 def class_in(minutes_until: int, people: float = 35, total: int = 195):

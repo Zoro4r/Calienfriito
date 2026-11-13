@@ -54,9 +54,15 @@ class CognitiveActionOut(BaseModel):
 
 class LearningActionOut(BaseModel):
     fan_pct: int
-    heater_pct: int
-    minutes_learned: int
+    heater_pct: int = 0
     ready: bool
+    # Predictive controller (services/forecast_controller.py): median temperature expected
+    # in 30 min, highest 90th percentile in that window, minutes of history, model used.
+    forecast_30: Optional[float] = None
+    forecast_30_p90: Optional[float] = None
+    minutes_seen: Optional[int] = None
+    model: Optional[str] = None
+    minutes_learned: Optional[int] = None   # readings stored by the earlier learning controller
 
 
 class SensorReadingOut(BaseModel):
@@ -71,7 +77,7 @@ class SensorReadingOut(BaseModel):
     cognitive_action: Optional[CognitiveActionOut] = None
     # Decision taken on the ESP32 node (readings ingested over MQTT); None for HTTP readings.
     node_state: Optional[dict] = None
-    # What the learning controller would do, in shadow (services/learning_controller.py).
+    # What the predictive controller would do, in shadow (services/forecast_controller.py).
     learning_action: Optional[LearningActionOut] = None
 
 

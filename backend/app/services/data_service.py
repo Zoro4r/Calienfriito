@@ -3,8 +3,7 @@ from datetime import datetime, timedelta
 from starlette.concurrency import run_in_threadpool
 from app.core.timeutils import to_local
 from app.models.sensor import SensorReading
-from app.services.climate_service import outdoor_temp
-from app.services.learning_controller import HORIZON_MIN, LOOKAHEAD_MIN, LearningController
+from app.services.forecast_controller import HORIZON_MIN, ForecastController
 from app.services.predictive_service import calculate_cooling_demand
 from app.services.room_profile import get_metadata
 from app.services.strategy_comparison import compare_reading
@@ -122,42 +121,37 @@ def occupancy_forecast(db_sql, room_id: str, reading_timestamp: datetime, minute
     return out
 
 
-# MQ-135 ADC level from which the firmware considers the room occupied (OCCUPANCY_ADC_THRESHOLD).
-NODE_OCCUPIED_ADC = 2200
-# One learning controller per room, kept in memory and persisted in Mongo each minute.
-_SHADOW: dict[str, LearningController] = {}
+# One predictive controller per room, kept in memory and persisted in Mongo each minute.
+_SHADOW: dict[str, ForecastController] = {}
 
 
 async def shadow_learning_step(db, room_id: str, reading: SensorReading, db_sql=None) -> dict | None:
-    """Run the learning controller in shadow on a node reading.
+    """Run the predictive controller in shadow on a node reading.
 
-    The node's rules act; the controller learns from what the node did and returns
-    what it would do with the same reading. None when the reading is not a node
-    decision or lacks CO2 (needed to estimate the people in the room).
+    The node's rules act; the controller forecasts the temperature and returns what it
+    would do (start the fan early or not). None when the reading is not a node decision.
     """
     ns = reading.node_state or {}
-    if not ns.get("accion") or reading.co2_ppm is None:
+    if not ns.get("accion") or reading.temperature is None:
         return None
     ctrl = _SHADOW.get(room_id)
     if ctrl is None:
-        volume = get_metadata(room_id)["volume_m3"]
-        state = await db["learning_state"].find_one({"_id": room_id})
-        ctrl = LearningController.from_state(state, volume_m3=volume) if state else LearningController(volume_m3=volume)
+        state = await db["forecast_state"].find_one({"_id": room_id})
+        ctrl = ForecastController.from_state(state) if state else ForecastController()
         _SHADOW[room_id] = ctrl
     ts = reading.timestamp.replace(tzinfo=None)
-    adc = ns.get("co2_proxy")
-    occupied = adc >= NODE_OCCUPIED_ADC if adc is not None else ns.get("accion") != "DISABLED"
-    applied = ((ns.get("ventilador_pwm") or 0) / 255, 1.0 if ns.get("calefactor") else 0.0)
     ts_s = (ts - datetime(1970, 1, 1)).total_seconds()
-    forecast = None
-    if db_sql is not None and ctrl.bucket is not None and int(ts_s // 60) != ctrl.bucket:
-        # A minute closes with this reading: the controller will replan, give it the timetable.
-        timetable = await run_in_threadpool(occupancy_forecast, db_sql, room_id, ts, LOOKAHEAD_MIN + HORIZON_MIN)
-        forecast = lambda: timetable  # noqa: E731
-    ctrl.step(ts_s, reading.temperature, float(reading.co2_ppm),
-              occupied, outdoor_temp(to_local(ts)), applied=applied, forecast=forecast)
-    if ctrl.closed_minute:
-        await db["learning_state"].replace_one({"_id": room_id}, {"_id": room_id, **ctrl.to_state()}, upsert=True)
+    if ctrl.closes_minute(ts_s):
+        # A minute closes: the controller may forecast and decide, so tell it whether the
+        # room is in use (the node sees people, or a class is on or starts within the horizon).
+        in_use = ns.get("accion") != "DISABLED"
+        if not in_use and db_sql is not None:
+            timetable = await run_in_threadpool(occupancy_forecast, db_sql, room_id, ts, HORIZON_MIN)
+            in_use = any(c for c, _ in timetable)
+        await run_in_threadpool(ctrl.step, ts_s, reading.temperature, in_use)   # Chronos runs here
+        await db["forecast_state"].replace_one({"_id": room_id}, {"_id": room_id, **ctrl.to_state()}, upsert=True)
+    else:
+        ctrl.step(ts_s, reading.temperature)
     summary = ctrl.summary()
     from app.services.room_controller import remember_action
     remember_action(room_id, ts, summary)

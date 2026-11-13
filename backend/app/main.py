@@ -62,6 +62,8 @@ async def shutdown_mqtt():
 async def startup_learning_loop():
     from app.services.room_controller import start_learning_loop
     start_learning_loop()
+    from app.services.forecast_controller import warm_up
+    warm_up()
 
 
 @app.on_event("shutdown")
