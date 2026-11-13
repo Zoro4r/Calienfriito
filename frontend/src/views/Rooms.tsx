@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Link, useSearchParams } from 'react-router-dom'
-import { ArrowRight, Plus, Plug, RefreshCw } from 'lucide-react'
+import { useSearchParams } from 'react-router-dom'
+import { Plus, Plug, RefreshCw } from 'lucide-react'
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts'
 import api from '../api/client'
 import { useAuth } from '../context/AuthContext'
@@ -28,7 +28,7 @@ interface SensorRecent { sensor_id: string; room_id: string | null; points: Poin
 interface WeekBlock { room_id: string; day: number; start: string; end: string; kind: string; people: number }
 
 type View = 'mediciones' | 'horarios' | RoomTab | 'infraestructura'
-// En vivo stays only on the full room page (Abrir aula): Mediciones covers it here.
+// En vivo stays only on the full room page: Mediciones covers it here.
 const ROOM_TABS: RoomTab[] = ['estrategias', 'control', 'historial', 'config']
 // Shown instead of a value when the node's DHT sensor (DHT22 or DHT11) sends no reading.
 const DHT_MISSING: Band = { text: 'Sin lectura del sensor DHT', tone: 'warn' }
@@ -270,7 +270,6 @@ export default function Rooms() {
               </div>
               <div className="ml-auto flex items-center gap-2">
                 {isAdmin && <button className="btn btn-ghost" onClick={() => setConnecting(room)}><Plug size={14} /> Conectar nodo</button>}
-                <Link to={`/room/${room.id}`} className="btn btn-secondary">Abrir aula <ArrowRight size={14} /></Link>
               </div>
             </header>
 
