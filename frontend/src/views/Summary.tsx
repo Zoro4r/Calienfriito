@@ -13,8 +13,8 @@ import { useRoomRows, stateOf, shortDate, ORDER, type RoomRow } from '../hooks/u
 
 interface WeekBlock { room_id: string; day: number; start: string; end: string; kind: string; people: number }
 interface RoomEvent { room_id: string; timestamp: string; kind: string; text: string; tone: Tone }
-interface RoiRoom { strategy: string; reference_kwh: number; rules_kwh: number; learning_kwh: number }
-interface Roi { tariff: { pen_per_kwh: number }; rooms: RoiRoom[]; simulated: boolean }
+interface RoiRoom { strategy: string; reference_hours: number; rules_hours: number; rules_eq_hours: number; learning_hours: number; learning_eq_hours: number }
+interface Roi { tariff: { pen_per_kwh: number }; fan_w: number; rooms: RoiRoom[]; simulated: boolean }
 
 const H0 = 7, H1 = 22
 const EVENTS_POLL_MS = 30_000
@@ -100,9 +100,11 @@ export default function Summary() {
   // Month savings, same figures as Rentabilidad.
   const month = useMemo(() => {
     if (!roi || !roi.rooms.length) return null
-    const real = roi.rooms.reduce((s, r) => s + (r.strategy === 'learning' ? r.learning_kwh : r.rules_kwh), 0)
-    const ref = roi.rooms.reduce((s, r) => s + r.reference_kwh, 0)
-    return { saving: (ref - real) * roi.tariff.pen_per_kwh, pct: ref > 0 ? (real / ref - 1) * 100 : 0, simulated: roi.simulated }
+    const learning = (r: RoiRoom) => r.strategy === 'learning'
+    const eq = roi.rooms.reduce((s, r) => s + (learning(r) ? r.learning_eq_hours : r.rules_eq_hours), 0)
+    const on = roi.rooms.reduce((s, r) => s + (learning(r) ? r.learning_hours : r.rules_hours), 0)
+    const ref = roi.rooms.reduce((s, r) => s + r.reference_hours, 0)
+    return { saving: (ref - eq) * roi.fan_w / 1000 * roi.tariff.pen_per_kwh, pct: ref > 0 ? (on / ref - 1) * 100 : 0, simulated: roi.simulated }
   }, [roi])
 
   // Same event at the same minute in several rooms ("dejó de reportar" when a feed stops) reads as one line.
@@ -222,9 +224,9 @@ export default function Summary() {
               <div className="flex flex-col gap-3 p-4">
                 <div className="grid grid-cols-2 gap-4">
                   <div className="flex flex-col gap-1"><span className="text-xs text-slate-400">{month.saving >= 0 ? 'Ahorro' : 'Gasto extra'}</span><span className="text-xl font-semibold text-white tabular-nums">S/ {Math.abs(month.saving).toLocaleString('es-PE', { maximumFractionDigits: 0 })}</span></div>
-                  <div className="flex flex-col gap-1"><span className="text-xs text-slate-400">Energía</span><span className="text-xl font-semibold text-white tabular-nums">{month.pct <= 0 ? '−' : '+'}{Math.abs(month.pct).toFixed(0)} %</span></div>
+                  <div className="flex flex-col gap-1"><span className="text-xs text-slate-400">Horas de ventilador</span><span className="text-xl font-semibold text-white tabular-nums">{month.pct <= 0 ? '−' : '+'}{Math.abs(month.pct).toFixed(0)} %</span></div>
                 </div>
-                <p className="text-xs text-slate-500">Frente a encender el equipo toda la clase.{month.simulated ? ' Datos simulados.' : ''}</p>
+                <p className="text-xs text-slate-500">Frente al ventilador encendido toda la jornada.{month.simulated ? ' Datos simulados.' : ''}</p>
               </div>
             )}
           </Section>
