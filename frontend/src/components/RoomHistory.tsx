@@ -124,7 +124,8 @@ export default function RoomHistory({ roomId }: { roomId: string }) {
   const xFormat = (ms: number) => (ms >= end ? '24:00' : clock(ms))
   const s = data.summary
 
-  // The row under the cursor, or the latest reading when nothing is hovered.
+  // The 5-min average under the cursor, or the latest one when nothing is hovered (it can differ
+  // from the instant value in Mediciones, so the footer says it is an average).
   const focus = rows.length ? rows[hover != null && hover < rows.length ? hover : rows.length - 1] : null
   const track = {
     onMouseMove: (st: { activeTooltipIndex?: number }) => { if (st?.activeTooltipIndex != null) setHover(st.activeTooltipIndex) },
@@ -227,7 +228,7 @@ export default function RoomHistory({ roomId }: { roomId: string }) {
         </div>
 
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1 pt-2 text-xs text-slate-400">
-          <span className="tabular-nums text-slate-300">{focus ? `${hover != null ? 'A las' : 'Última lectura,'} ${clock(focus.t)}` : ''}</span>
+          <span className="tabular-nums text-slate-300">{focus ? `${hover != null ? 'Promedio de 5 min desde las' : 'Último promedio de 5 min, desde las'} ${clock(focus.t)}` : ''}</span>
           <span className="ml-auto flex items-center gap-1.5"><span className="h-2.5 w-3 rounded-sm" style={{ background: CLASS_FILL, opacity: 0.25 }} />Con estudiantes</span>
           <span className="flex items-center gap-1.5"><span className="w-3 border-t border-dashed border-slate-400" />Umbral de la regla</span>
           <span className="flex items-center gap-1.5"><span className="h-2.5 w-3 rounded-sm" style={{ background: FAN_COLOR, opacity: 0.5 }} />Potencia del ventilador</span>
