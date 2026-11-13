@@ -5,21 +5,19 @@ Simulated comparison of two control strategies for one classroom:
                   decidirHeuristica): fan 100 % at T >= 24.5 °C, heater at
                   T <= 23.5 °C, off at 24.0 °C, 60 s minimum between switches,
                   everything off when the room is empty.
-  B · Learning  — a model that learns how the room responds (updated every
-                  minute with the newest reading) plus a planner that, every
-                  minute, tries several fan/heater levels on that model over
-                  the next 15 minutes and applies the cheapest one that keeps
-                  the room in the comfort band.
+  B · Predictive — the backend's ForecastController: every 5 min a pretrained model
+                  (Amazon Chronos-Bolt, zero-shot) forecasts the next 30 min of indoor
+                  temperature; when a class is on or about to start and the high forecast
+                  (p90) crosses 24.5 °C, the fan starts early. Otherwise the rules decide.
 
 Both strategies face exactly the same simulated days: same people, same outdoor
 temperature, same sensor noise. The simulated room reacts to what each strategy
 does, so the comparison is fair.
 
-The learning strategy does not know the room equations below. It only sees what
-the backend would see: indoor temperature and CO2 (with sensor noise), outdoor
-temperature (weather service), whether the room is occupied, and its own
-actuator levels. During the first WARMUP_DAYS the rules control the room and the
-model learns in shadow; from then on the model controls.
+The predictive strategy does not know the room equations below: it only sees the
+measured indoor temperature (with sensor noise) and the room's timetable. Both
+strategies are scored on the same days (after WARMUP_DAYS, kept for comparability with
+earlier runs). Success metric: minutes of class above 24.5 °C.
 
 Usage:
     python ml/simulation/compare_strategies.py            # default 30 days
@@ -37,12 +35,12 @@ from pathlib import Path
 
 import numpy as np
 
-# The learning strategy is the backend's controller, imported as is.
+# The predictive strategy is the backend's controller, imported as is.
 try:
-    from app.services.learning_controller import HORIZON_MIN, LOOKAHEAD_MIN, LearningController
+    from app.services.forecast_controller import HORIZON_MIN, ForecastController, default_forecaster, persistence
 except ImportError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "backend"))
-    from app.services.learning_controller import HORIZON_MIN, LOOKAHEAD_MIN, LearningController  # noqa: E402
+    from app.services.forecast_controller import HORIZON_MIN, ForecastController, default_forecaster, persistence  # noqa: E402
 
 STEP_S = 30                      # simulation step
 STEPS_PER_MIN = 60 // STEP_S
@@ -177,36 +175,37 @@ class Rules:
         return (self.level / 100 if prop == "COOLING" else 0.0, 1.0 if prop == "HEATING" else 0.0)
 
 
-# ── Strategy B: learning model + planner ──────────────────────────────────────
-class Learning:
-    """The backend's LearningController (the same class that runs live in shadow),
-    in charge of the room after WARMUP_DAYS. During warm-up the rules act and the
-    controller learns from what they did, exactly as it does next to the real node."""
-    name = "Aprendizaje automático"
+# ── Strategy B: predictive (pretrained forecaster) ────────────────────────────
+class Predictive:
+    """The backend's ForecastController (the same class that runs live). When it asks for
+    the fan, the fan runs at that level; otherwise the rules act, exactly as live, where
+    an empty decision hands the node back to its rules ("auto")."""
+    name = "Control predictivo"
 
-    def __init__(self, act: Actuators, warmup_s: int, volume_m3: float = 190.0, seed: int = 11,
-                 expected: np.ndarray | None = None) -> None:
-        self.ctrl = LearningController(act.fan_max_m3s, act.fan_max_w, act.heater_w, volume_m3, explore=0.03, seed=seed)
+    def __init__(self, act: "Actuators", expected: np.ndarray | None = None, forecaster=None) -> None:
+        self.ctrl = ForecastController(forecaster or default_forecaster())
         self.rules = Rules()
-        self.warmup_s = warmup_s
-        self.expected = expected      # timetable per step; None = no timetable (cannot prepare the room)
+        self.expected = expected        # timetable per step (expected people); None = unknown
+        self.preds: list[tuple[int, float, float]] = []   # (target step, forecast, temp when forecast)
 
-    def forecast_at(self, i: int):
-        if self.expected is None:
-            return None
-        n = len(self.expected)
-        def build():
-            return [(bool(self.expected[j] > 0), float(self.expected[j]))
-                    for j in (min(n - 1, i + m * STEPS_PER_MIN) for m in range(LOOKAHEAD_MIN + HORIZON_MIN))]
-        return build
+    def in_use(self, i: int, occupied: bool) -> bool:
+        if occupied or self.expected is None:
+            return occupied
+        return bool(np.any(self.expected[i:i + HORIZON_MIN * STEPS_PER_MIN] > 0))
 
     def decide(self, t_meas: float, occupied: bool, now_s: int, tout: float, co2_meas: float) -> tuple[float, float]:
+        i = now_s // STEP_S
+        decided_before = self.ctrl.last_decision
+        self.ctrl.step(now_s, t_meas, self.in_use(i, occupied))
+        if self.ctrl.last_decision != decided_before and self.ctrl.forecast_c is not None:
+            self.preds.append((i + HORIZON_MIN * STEPS_PER_MIN, self.ctrl.forecast_c, self.ctrl.history[-1]))
         rules_action = self.rules.decide(t_meas, occupied, now_s, co2_meas=co2_meas)
-        forecast = self.forecast_at(now_s // STEP_S)
-        if now_s < self.warmup_s:
-            self.ctrl.step(now_s, t_meas, co2_meas, occupied, tout, applied=rules_action, forecast=forecast)
-            return rules_action
-        return self.ctrl.step(now_s, t_meas, co2_meas, occupied, tout, forecast=forecast)
+        if self.ctrl.fan_pct > 0:
+            return self.ctrl.fan_pct / 100, 0.0
+        return rules_action
+
+
+Learning = Predictive   # name kept for generate_month.py
 
 
 # ── Simulation loop ───────────────────────────────────────────────────────────
@@ -242,8 +241,11 @@ def metrics(log: dict, sc: dict, act: Actuators, from_step: int, to_step: int) -
     heat_wh = float(np.sum(act.heater_w * log["heat"][sl]) * STEP_S / 3600)
     switches = int(np.sum(np.diff((log["fan"][sl] > 0).astype(int)) != 0) + np.sum(np.diff((log["heat"][sl] > 0).astype(int)) != 0))
     occ_min = float(np.sum(occ) * minutes)
+    hot = t > BAND_HI
     return {
         "occupied_hours": round(occ_min / 60, 1),
+        "min_hot_class": round(float(np.sum(hot & occ)) * minutes, 0),
+        "pct_time_hot": round(100 * float(np.sum(hot & occ)) * minutes / occ_min, 1),
         "pct_time_out_of_band": round(100 * float(np.sum(out_band & occ)) * minutes / occ_min, 1),
         "min_out_of_comfort_22_25": round(float(np.sum(out_comfort & occ)) * minutes, 0),
         "degree_minutes_out_of_band": round(float(np.sum(deg[occ])) * minutes, 1),
@@ -261,7 +263,8 @@ def run(act: Actuators, days: int, seed: int, out: Path, tag: str) -> dict:
     sc = make_scenario(days, room, seed)
     warm_steps = WARMUP_DAYS * 24 * 3600 // STEP_S
     rules_log = simulate(Rules(), sc, room, act, days)
-    learn_log = simulate(Learning(act, warm_steps * STEP_S, room.volume_m3, expected=sc["expected"]), sc, room, act, days)
+    pred = Predictive(act, expected=sc["expected"])
+    learn_log = simulate(pred, sc, room, act, days)
     n = len(sc["people"])
     result = {
         "actuators": asdict(act),
@@ -270,6 +273,7 @@ def run(act: Actuators, days: int, seed: int, out: Path, tag: str) -> dict:
         "evaluated_days": days - WARMUP_DAYS,
         "rules": metrics(rules_log, sc, act, warm_steps, n),
         "learning": metrics(learn_log, sc, act, warm_steps, n),
+        "forecast": forecast_error(pred.preds, learn_log, warm_steps, n),
         "per_day": [],
     }
     day_steps = 24 * 3600 // STEP_S
@@ -284,6 +288,21 @@ def run(act: Actuators, days: int, seed: int, out: Path, tag: str) -> dict:
         })
     plot(sc, rules_log, learn_log, result, out / f"{tag}.png", act)
     return result
+
+
+def forecast_error(preds, log, from_step: int, to_step: int) -> dict:
+    """Mean absolute error of the 30-min forecasts against the measured temperature, next
+    to the persistence baseline ("it stays as it is") on the same pairs."""
+    pairs = [(p, now, log["t_meas"][k]) for k, p, now in preds if from_step <= k < to_step]
+    if not pairs:
+        return {"pairs": 0, "mae": None, "mae_baseline": None}
+    return {
+        "horizon_min": HORIZON_MIN,
+        "model": getattr(default_forecaster(), "model_name", "persistencia"),
+        "pairs": len(pairs),
+        "mae": round(float(np.mean([abs(p - a) for p, _, a in pairs])), 3),
+        "mae_baseline": round(float(np.mean([abs(n - a) for _, n, a in pairs])), 3),
+    }
 
 
 def plot(sc, rules_log, learn_log, result, path: Path, act: Actuators) -> None:
@@ -302,15 +321,14 @@ def plot(sc, rules_log, learn_log, result, path: Path, act: Actuators) -> None:
     ax1.axhspan(BAND_LO, BAND_HI, color="#34d399", alpha=0.12, label="Banda 23.5–24.5 °C")
     ax1.plot(hours, sc["tout"][s:e], color="#94a3b8", lw=1, ls="--", label="Exterior")
     ax1.plot(hours, rules_log["t"][s:e], color="#64748b", lw=1.6, label="Reglas")
-    ax1.plot(hours, learn_log["t"][s:e], color="#0ea5e9", lw=1.6, label="Aprendizaje")
+    ax1.plot(hours, learn_log["t"][s:e], color="#0ea5e9", lw=1.6, label="Control predictivo")
     ax1.set_ylabel("°C")
     ax1.legend(loc="upper left", fontsize=8, ncol=4)
     ax1.set_title(f"Día {busiest + 1} · {act.label}", fontsize=10)
     ax2.fill_between(hours, sc["people"][s:e], color="#cbd5e1")
     ax2.set_ylabel("Personas")
     ax3.step(hours, rules_log["fan"][s:e] * 100, color="#64748b", lw=1, where="post", label="Ventilador · reglas")
-    ax3.step(hours, learn_log["fan"][s:e] * 100, color="#0ea5e9", lw=1, where="post", label="Ventilador · aprendizaje")
-    ax3.step(hours, -learn_log["heat"][s:e] * 100, color="#f97316", lw=1, where="post", label="Calefactor · aprendizaje (neg.)")
+    ax3.step(hours, learn_log["fan"][s:e] * 100, color="#0ea5e9", lw=1, where="post", label="Ventilador · predictivo")
     ax3.step(hours, -rules_log["heat"][s:e] * 100, color="#fdba74", lw=1, where="post", label="Calefactor · reglas (neg.)")
     ax3.set_ylabel("%")
     ax3.set_xlabel("Hora")
@@ -326,9 +344,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--days", type=int, default=30)
     parser.add_argument("--seed", type=int, default=7)
-    parser.add_argument("--comfort-weight", type=float, default=LearningController.COMFORT_WEIGHT)
     args = parser.parse_args()
-    LearningController.COMFORT_WEIGHT = args.comfort_weight
     out = Path(__file__).parent / "results"
     out.mkdir(exist_ok=True)
     results = {
@@ -338,10 +354,11 @@ def main() -> None:
     (out / "results.json").write_text(json.dumps(results, indent=2, ensure_ascii=False))
     for key, r in results.items():
         print(f"\n== {r['actuators']['label']} · {r['evaluated_days']} días evaluados ==")
-        print(f"{'':32}{'Reglas':>12}{'Aprendizaje':>14}")
-        for k in ("pct_time_out_of_band", "min_out_of_comfort_22_25", "degree_minutes_out_of_band",
+        print(f"{'':32}{'Reglas':>12}{'Predictivo':>14}")
+        for k in ("min_hot_class", "pct_time_hot", "pct_time_out_of_band", "min_out_of_comfort_22_25", "degree_minutes_out_of_band",
                   "max_temp_occupied", "min_temp_occupied", "fan_kwh", "heater_kwh", "total_kwh", "on_off_switches"):
             print(f"{k:32}{r['rules'][k]:>12}{r['learning'][k]:>14}")
+        print("forecast:", r["forecast"])
 
 
 if __name__ == "__main__":

@@ -126,7 +126,7 @@ def main() -> None:
 
     warm_s = cs.WARMUP_DAYS * 24 * 3600
     rules_log = cs.simulate(cs.Rules(), sc, room, act, args.days)
-    learn_log = cs.simulate(cs.Learning(act, warm_s, room.volume_m3, expected=sc["expected"]), sc, room, act, args.days)
+    learn_log = cs.simulate(cs.Predictive(act, expected=sc["expected"]), sc, room, act, args.days)
 
     db = MongoClient(MONGO_URI)["climate_db"]
     db["sensor_readings"].delete_many({"sensor_id": sensor_id, "demo_seed": True})
