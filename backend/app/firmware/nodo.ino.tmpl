@@ -144,7 +144,7 @@ const bool  TELEMETRIA_SIMULADA       = false;
 const bool  TACOMETRO_SIMULADO        = false;
 const int   FAN_PULSOS_POR_VUELTA     = 2;      // estandar de los ventiladores de PC
 const int   FAN_RPM_MAX               = 1800;   // ventilador de 120 mm a 12 V (para la simulacion)
-const int   FAN_PWM_HZ                = 25000;  // estandar Intel para ventiladores de 4 pines: inaudible
+const int   FAN_PWM_HZ                = 100;    // ventilador de 2 cables via HW-517: su optoacoplador no conmuta a 25 kHz
 // Periodo de muestreo, control y telemetria MQTT (el dashboard recibe 1 dato/s).
 // El DHT22 solo se lee cada 2 s (limite de la libreria Adafruit): entre medio
 // devuelve la ultima lectura. MQ-135 y MQ-7 si se leen en cada ciclo.
