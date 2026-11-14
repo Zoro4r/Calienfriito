@@ -226,7 +226,7 @@ export default function Summary() {
                   <div className="flex flex-col gap-1"><span className="text-xs text-slate-400">{month.saving >= 0 ? 'Ahorro' : 'Gasto extra'}</span><span className="text-xl font-semibold text-white tabular-nums">S/ {Math.abs(month.saving).toLocaleString('es-PE', { maximumFractionDigits: 0 })}</span></div>
                   <div className="flex flex-col gap-1"><span className="text-xs text-slate-400">Horas de ventilador</span><span className="text-xl font-semibold text-white tabular-nums">{month.pct <= 0 ? '−' : '+'}{Math.abs(month.pct).toFixed(0)} %</span></div>
                 </div>
-                <p className="text-xs text-slate-500">Frente al ventilador encendido toda la jornada.{month.simulated ? ' Datos simulados.' : ''}</p>
+                <p className="text-xs text-slate-500">Frente al ventilador encendido a todas horas.{month.simulated ? ' Datos simulados.' : ''}</p>
               </div>
             )}
           </Section>
