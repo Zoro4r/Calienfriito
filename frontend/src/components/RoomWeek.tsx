@@ -161,7 +161,7 @@ export default function RoomWeek({ room }: { room: Room | undefined }) {
             <div>
               <span className="field-label">Frecuencia</span>
               <div className="segmented grid w-full grid-cols-2 p-0.5" role="radiogroup" aria-label="Frecuencia">
-                {([['weekly', `Todos los ${DAYS_LONG[form.day]}`], ['once', `Solo el ${dayLabel(form.day)}`]] as const).map(([v, label]) => (
+                {([['weekly', `Todos los ${DAYS_LONG[form.day]}`], ['once', `Solo el ${dayNum(shiftDayBy(anchor, form.day))} de ${monthName(shiftDayBy(anchor, form.day))}`]] as const).map(([v, label]) => (
                   <button key={v} type="button" role="radio" aria-checked={form.repeat === v} onClick={() => setForm({ ...form, repeat: v })}
                     className={`segmented-item justify-center px-2 py-1.5 text-xs ${form.repeat === v ? 'segmented-item-active' : ''}`}>{label}</button>
                 ))}
