@@ -153,7 +153,8 @@ _LIVE_CACHE: dict[tuple, tuple[datetime, dict | None]] = {}
 LIVE_CACHE_S = 60
 
 
-async def live_series(db, sensors: list[str], range_key: str, anchor: date | None = None) -> dict | None:
+async def live_series(db, sensors: list[str], range_key: str, anchor: date | None = None,
+                      room_id: str | None = None, timetable: tuple[list, list] = ([], [])) -> dict | None:
     key = (tuple(sorted(sensors)), range_key, anchor)
     now = datetime.utcnow()
     hit = _LIVE_CACHE.get(key)
@@ -161,14 +162,41 @@ async def live_series(db, sensors: list[str], range_key: str, anchor: date | Non
         ended = bool(hit[1]) and datetime.fromisoformat(hit[1]["end"]) <= hit[0]   # a past period: final
         if ended or (now - hit[0]).total_seconds() < LIVE_CACHE_S:
             return hit[1]
-    result = await _live_series(db, sensors, range_key, anchor)
+    result = await _live_series(db, sensors, range_key, anchor, room_id, timetable)
     if len(_LIVE_CACHE) > 200:
         _LIVE_CACHE.clear()
     _LIVE_CACHE[key] = (now, result)
     return result
 
 
-async def _live_series(db, sensors: list[str], range_key: str, anchor: date | None = None) -> dict | None:
+def class_intervals(weekly, one_off, start: datetime, end: datetime) -> list[tuple[datetime, datetime, int]]:
+    """The room's classes inside [start, end) (naive UTC) from its timetable: weekly classes
+    (weekday, start time, end time, people) and one-day classes (start, end, people), both
+    in local time. Returned in naive UTC, sorted."""
+    out = []
+    first = (start + _OFFSET).date()
+    for k in range(((end + _OFFSET).date() - first).days + 1):
+        day = first + timedelta(days=k)
+        for wd, s_t, e_t, people in weekly:
+            if day.weekday() == wd:
+                out.append((datetime.combine(day, s_t) - _OFFSET, datetime.combine(day, e_t) - _OFFSET, people))
+    for s_dt, e_dt, people in one_off:
+        out.append((s_dt - _OFFSET, e_dt - _OFFSET, people))
+    return sorted((max(s_, start), min(e_, end), p) for s_, e_, p in out if s_ < end and e_ > start)
+
+
+def room_timetable(db_sql, room_id: str) -> tuple[list, list]:
+    """(weekly, one_off) classes of a room, as class_intervals expects them (sync, SQL)."""
+    from app.models.admin import Reservation, Schedule
+    weekly = [(s.day_of_week, s.start_time, s.end_time, s.expected_people)
+              for s in db_sql.query(Schedule).filter(Schedule.room_id == room_id).all()]
+    one_off = [(r.start_time, r.end_time, r.expected_occupancy)
+               for r in db_sql.query(Reservation).filter(Reservation.room_id == room_id).all()]
+    return weekly, one_off
+
+
+async def _live_series(db, sensors: list[str], range_key: str, anchor: date | None = None,
+                       room_id: str | None = None, timetable: tuple[list, list] = ([], [])) -> dict | None:
     bucket_min = BUCKET_MIN[range_key]
     base = {"sensor_id": {"$in": sensors}, "node_state.accion": {"$exists": True}}
     last = await db["sensor_readings"].find(base, {"timestamp": 1}).sort("timestamp", -1).limit(1).to_list(length=1)
@@ -183,37 +211,25 @@ async def _live_series(db, sensors: list[str], range_key: str, anchor: date | No
     ts = {"$toDate": {"$substrBytes": ["$timestamp", 0, 19]}}
     fan = {"$divide": [{"$ifNull": ["$node_state.ventilador_pwm", 0]}, 255]}
     heat = {"$cond": ["$node_state.calefactor", 1, 0]}
-    occupied = {"$ne": ["$node_state.accion", "DISABLED"]}   # the firmware's own occupancy decision
     # One pass over the period's readings (~86 000 a day at 1 Hz): buckets, totals and
-    # occupied minutes come out of the same scan.
+    # the temperature of each minute come out of the same scan.
     facets = await db["sensor_readings"].aggregate([
         {"$match": match},
-        {"$addFields": {"_t": ts, "_fan": fan, "_heat": heat, "_occ": occupied}},
+        {"$addFields": {"_t": ts, "_fan": fan, "_heat": heat}},
         {"$facet": {
             "rows": [
                 {"$group": {
                     "_id": {"b": {"$dateTrunc": {"date": "$_t", "unit": "minute", "binSize": bucket_min}}},
                     "temp": {"$avg": "$temperature"}, "fan": {"$avg": "$_fan"}, "heat": {"$avg": "$_heat"},
-                    "lfan": {"$avg": {"$divide": ["$learning_action.fan_pct", 100]}},
-                    "lheat": {"$avg": {"$divide": ["$learning_action.heater_pct", 100]}},
-                    "pred": {"$avg": "$learning_action.forecast_30"},
                 }},
                 {"$sort": {"_id.b": 1}},
             ],
             "totals": [
-                {"$group": {
-                    "_id": None, "n": {"$sum": 1},
-                    "occ": {"$sum": {"$cond": ["$_occ", 1, 0]}},
-                    "out": {"$sum": {"$cond": [{"$and": ["$_occ", _out_of_band("$temperature")]}, 1, 0]}},
-                    "hot": {"$sum": {"$cond": [{"$and": ["$_occ", _hot("$temperature")]}, 1, 0]}},
-                    "fan3": {"$sum": {"$pow": ["$_fan", 3]}}, "heat": {"$sum": "$_heat"},
-                    "lfan3": {"$sum": {"$pow": [{"$divide": [{"$ifNull": ["$learning_action.fan_pct", 0]}, 100]}, 3]}},
-                    "lheat": {"$sum": {"$divide": [{"$ifNull": ["$learning_action.heater_pct", 0]}, 100]}},
-                    "first": {"$min": "$timestamp"},
-                }},
+                {"$group": {"_id": None, "n": {"$sum": 1}, "fan3": {"$sum": {"$pow": ["$_fan", 3]}},
+                            "heat": {"$sum": "$_heat"}, "first": {"$min": "$timestamp"}}},
             ],
             "minutes": [
-                {"$group": {"_id": {"$dateTrunc": {"date": "$_t", "unit": "minute"}}, "occ": {"$max": "$_occ"}}},
+                {"$group": {"_id": {"$dateTrunc": {"date": "$_t", "unit": "minute"}}, "temp": {"$avg": "$temperature"}}},
             ],
         }},
     ]).to_list(length=None)
@@ -223,17 +239,47 @@ async def _live_series(db, sensors: list[str], range_key: str, anchor: date | No
     if t and t["n"] > 1:
         span_end = min(end, data_end)
         step_s = max(1.0, (span_end - datetime.fromisoformat(t["first"][:19])).total_seconds() / (t["n"] - 1))
-    learn_rows = [{"_id": r["_id"], "temp": None, "fan": r.get("lfan"), "heat": r.get("lheat")} for r in rows]
+
+    # Class time comes from the room's timetable (Horarios), as in Rentabilidad.
+    classes = class_intervals(*timetable, start, end)
+    in_class = lambda m: any(s_ <= m < e_ for s_, e_, _ in classes)  # noqa: E731
+    occ = out = hot = 0
+    for m in minutes:
+        if m.get("temp") is None or not in_class(m["_id"]):
+            continue
+        occ += 1
+        out += m["temp"] < BAND_LO or m["temp"] > BAND_HI
+        hot += m["temp"] > BAND_HI
+    per_reading = 60 / step_s                      # _summary counts readings: convert minutes
+    rules_totals = t and {"occ": occ * per_reading, "out": out * per_reading, "hot": hot * per_reading,
+                          "fan3": t["fan3"], "heat": t["heat"]}
+
+    # The predictive controller's decisions and forecasts (live and backfilled), per bucket.
+    shift = timedelta(minutes=HORIZON_MIN)
+    log = await db["forecast_log"].find(
+        {"room_id": room_id, "ts": {"$gte": start - shift, "$lt": end}}, {"_id": 0}).to_list(length=None) if room_id else []
+    by_bucket: dict[datetime, list[dict]] = {}
+    for d in log:
+        b = d["ts"] - timedelta(seconds=(d["ts"] - datetime(1970, 1, 1)).total_seconds() % (bucket_min * 60))
+        by_bucket.setdefault(b, []).append(d)
+    for r in rows:
+        ds = by_bucket.get(r["_id"]["b"], [])
+        preds = [d["forecast_30"] for d in ds if d.get("forecast_30") is not None]
+        r["pred"] = sum(preds) / len(preds) if preds else None
+        r["lfan"] = sum(d.get("fan_pct", 0) for d in ds) / len(ds) / 100 if ds else None
+    lfan3 = sum((d.get("fan_pct", 0) / 100) ** 3 for d in log if start <= d["ts"] < end) * 300 / step_s   # each decision holds 5 min
+
+    learn_rows = [{"_id": r["_id"], "temp": None, "fan": r.get("lfan"), "heat": 0.0} for r in rows]
     return {
         "source": "live",
         "equipment": {"label": "Actuadores del nodo", "fan_max_w": NODE_FAN_MAX_W, "heater_w": NODE_HEATER_W},
         "step_s": round(step_s, 1),
         **_frame(range_key, start, end, anchor, data_start, data_end),
-        "occupancy": _intervals(minutes),
-        "rules": {"points": _points(rows), "summary": _summary(t, step_s, NODE_FAN_MAX_W, NODE_HEATER_W)},
+        "occupancy": [{"start": s_.strftime(fmt_), "end": e_.strftime(fmt_), "people": p} for s_, e_, p in classes],
+        "rules": {"points": _points(rows), "summary": _summary(rules_totals, step_s, NODE_FAN_MAX_W, NODE_HEATER_W)},
         "forecast": forecast_accuracy(rows, bucket_min),
         "learning": {"points": _points(learn_rows),
-                     "summary": _summary(t and {"fan3": t["lfan3"], "heat": t["lheat"], "occ": t["occ"]},
+                     "summary": _summary(t and {"fan3": lfan3, "heat": 0, "occ": occ * per_reading},
                                          step_s, NODE_FAN_MAX_W, NODE_HEATER_W, comfort=False)},
     }
 
@@ -272,15 +318,15 @@ WARM_EVERY_S = 50
 _warm_task = None
 
 
-async def warm_live_cache(db, sensor_groups: list[list[str]]) -> int:
+async def warm_live_cache(db, rooms: list[tuple[str, list[str], tuple[list, list]]]) -> int:
     """Compute today's series for the rooms whose node reported in the last 2 minutes, so
     opening the Aprendizaje tab finds it ready instead of scanning a day of readings."""
     recent = (datetime.utcnow() - timedelta(minutes=2)).strftime("%Y-%m-%dT%H:%M:%S")
     done = 0
-    for sensors in sensor_groups:
+    for room_id, sensors, timetable in rooms:
         if await db["sensor_readings"].find_one({"sensor_id": {"$in": sensors}, "timestamp": {"$gte": recent}}, {"_id": 1}):
             _LIVE_CACHE.pop((tuple(sorted(sensors)), "1d", None), None)
-            await live_series(db, sensors, "1d")
+            await live_series(db, sensors, "1d", None, room_id, timetable)
             done += 1
     return done
 
@@ -299,14 +345,14 @@ def start_warm_loop() -> None:
     if _warm_task is not None:
         return
 
-    def groups() -> list[list[str]]:
+    def groups() -> list[tuple[str, list[str], tuple[list, list]]]:
         s = SessionLocal()
         try:
             by_room: dict[str, list[str]] = defaultdict(list)
             for d in s.query(SensorDevice).all():
                 if d.room_id:
                     by_room[d.room_id].append(d.id)
-            return list(by_room.values())
+            return [(room, ids, room_timetable(s, room)) for room, ids in by_room.items()]
         finally:
             s.close()
 

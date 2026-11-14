@@ -448,7 +448,7 @@ async def room_strategies(
     simulation if one exists (both strategies with their own temperature).
     """
     from datetime import date as date_cls
-    from app.services.strategy_series import live_series, simulation_series
+    from app.services.strategy_series import live_series, room_timetable, simulation_series
 
     anchor = date_cls.fromisoformat(day) if day else None
 
@@ -461,7 +461,8 @@ async def room_strategies(
             {"sensor_id": {"$in": sensors}, "is_simulated": False, "node_state.accion": {"$exists": True}}, {"_id": 1})
         if meta and (source == "simulation" or (source == "auto" and not real_node)):
             return await simulation_series(db, room_id, meta, range_key, anchor)
-        data = await live_series(db, sensors, range_key, anchor) if sensors else None
+        timetable = await run_in_threadpool(room_timetable, db_sql, room_id)
+        data = await live_series(db, sensors, range_key, anchor, room_id, timetable) if sensors else None
     except PyMongoError as exc:
         logger.error("MongoDB unavailable: %s", exc)
         raise HTTPException(status_code=503, detail="Database unavailable") from exc
