@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { RefreshCw } from 'lucide-react'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, ReferenceArea } from 'recharts'
 import api, { getApiErrorDetail } from '../api/client'
 import { fmt, parseUtc } from './ui'
@@ -203,6 +204,7 @@ export default function Strategies({ roomId, emptyMessage }: { roomId: string; e
       </div>
 
       {error ? <p className="text-sm text-red-300">{error}</p>
+        : !data ? <p className="flex items-center justify-center gap-2 py-16 text-sm text-slate-400"><RefreshCw size={14} className="animate-spin" /> Cargando la comparación…</p>
         : data?.source === 'none' ? <p className="text-sm text-slate-400">{emptyMessage}</p>
         : data && (
           <section className="surface flex min-h-0 flex-col rounded-xl px-2 pb-2 pt-3 lg:min-h-[360px] lg:flex-1">
