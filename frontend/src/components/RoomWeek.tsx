@@ -19,6 +19,7 @@ const H0 = 0, H1 = 24                        // the whole day; the grid scrolls
 const HOUR_PX = 44                           // height of one hour
 const SCROLL_TO_H = 7                        // opens at 07:00
 const DAY_NAMES = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom']
+const DAYS_LONG = ['lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábados']
 
 const minutes = (hm: string) => { const [h, m] = hm.split(':').map(Number); return h * 60 + m }
 const hm = (min: number) => `${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`
@@ -44,7 +45,8 @@ export default function RoomWeek({ room }: { room: Room | undefined }) {
   const isAdmin = user?.role === 'admin'
   const [version, setVersion] = useState(0)                 // bump to reload the week
   const cap = room?.max_capacity ?? 0
-  const [form, setForm] = useState<{ day: number; start: string; end: string; people: number } | null>(null)
+  // repeat: 'weekly' → a weekly class (schedule); 'once' → only that date (a reservation).
+  const [form, setForm] = useState<{ day: number; start: string; end: string; people: number; repeat: 'weekly' | 'once' } | null>(null)
   const [selected, setSelected] = useState<Shown & { day: number } | null>(null)
   const [drag, setDrag] = useState<{ day: number; from: number; to: number } | null>(null)
   const [busy, setBusy] = useState(false)
@@ -64,18 +66,29 @@ export default function RoomWeek({ room }: { room: Room | undefined }) {
     b = Math.min(b, H1 * 60 - 1)                            // 24:00 is written 23:59
     a = Math.min(a, b - 15)
     setDrag(null); setFormError(null)
-    setForm({ day: drag.day, start: hm(a), end: hm(b), people: Math.min(25, cap || 25) })
+    setForm({ day: drag.day, start: hm(a), end: hm(b), people: Math.min(25, cap || 25), repeat: 'weekly' })
   }
+
+  // "lunes 16 de noviembre" for a column of the week on screen.
+  const dayLabel = (d: number) => new Date(`${shiftDayBy(anchor, d)}T12:00:00`).toLocaleDateString('es', { weekday: 'long', day: 'numeric', month: 'long' })
 
   async function addClass() {
     if (!room || !form) return
     setBusy(true); setFormError(null)
     try {
-      await api.post(`/admin/rooms/${encodeURIComponent(room.id)}/schedules`,
-        { day_of_week: form.day, start_time: form.start, end_time: form.end, expected_people: form.people })
+      if (form.repeat === 'weekly') {
+        await api.post(`/admin/rooms/${encodeURIComponent(room.id)}/schedules`,
+          { day_of_week: form.day, start_time: form.start, end_time: form.end, expected_people: form.people })
+      } else {
+        const date = shiftDayBy(anchor, form.day)
+        await api.post('/admin/reservations', { room_id: room.id, start_time: `${date}T${form.start}:00`,
+          end_time: `${date}T${form.end}:00`, expected_occupancy: form.people })
+      }
       setForm(null); setVersion(v => v + 1)
     } catch (e) {
-      setFormError(getApiErrorDetail(e) ?? 'No se pudo guardar la clase.')
+      const status = (e as { response?: { status?: number } })?.response?.status
+      setFormError(form.repeat === 'once' && status === 409 ? 'Ya hay otra clase de solo ese día que se cruza con este horario.'
+        : getApiErrorDetail(e) ?? 'No se pudo guardar la clase.')
     } finally { setBusy(false) }
   }
 
@@ -83,7 +96,9 @@ export default function RoomWeek({ room }: { room: Room | undefined }) {
     if (!room || selected?.id == null) return
     setBusy(true); setFormError(null)
     try {
-      await api.delete(`/admin/rooms/${encodeURIComponent(room.id)}/schedules/${selected.id}`)
+      await api.delete(selected.isClass
+        ? `/admin/rooms/${encodeURIComponent(room.id)}/schedules/${selected.id}`
+        : `/admin/reservations/${selected.id}`)
       setSelected(null); setVersion(v => v + 1)
     } catch (e) {
       setFormError(getApiErrorDetail(e) ?? 'No se pudo eliminar la clase.')
@@ -107,13 +122,13 @@ export default function RoomWeek({ room }: { room: Room | undefined }) {
   const nowMin = new Date(now).getHours() * 60 + new Date(now).getMinutes()
 
   const columns: Shown[][] = days.map(d => !room ? [] : blocks.filter(b => b.room_id === room.id && b.day === d).map(b => {
-        const what = b.kind === 'class' ? 'Clase' : 'Reserva'
+        const what = b.kind === 'class' ? 'Clase semanal' : 'Clase de solo esta fecha'
         return {
           id: b.id ?? null, isClass: b.kind === 'class',
           key: `${b.room_id}-${b.day}-${b.start}`, a: minutes(b.start), b: minutes(b.end), dashed: b.kind === 'reservation',
-          line: b.kind === 'class' ? `${b.start} · ${b.people} p.` : `${b.start} · Reserva`,
+          line: `${b.start} · ${b.people} p.`,
           head: `${b.start}–${b.end}`,
-          sub: b.kind === 'class' ? `${b.people} personas` : `Reserva · ${b.people} p.`,
+          sub: b.kind === 'class' ? `${b.people} personas` : `${b.people} personas · solo esta fecha`,
           tip: `${what} ${b.start}–${b.end}\n${b.people} personas${b.by ? ` · reservó ${b.by}` : ''}`,
         }
       }))
@@ -138,12 +153,20 @@ export default function RoomWeek({ room }: { room: Room | undefined }) {
       {isAdmin && room && <p className="shrink-0 border-b border-slate-800 px-4 py-2 text-xs text-slate-400">Arrastra sobre un día para agregar una clase. Haz clic en una clase para eliminarla.</p>}
       {form && (
         <Dialog size="sm" title="Nueva clase" onClose={() => { setForm(null); setFormError(null) }}
-          footer={<>
-            <button className="btn btn-secondary ml-auto" disabled={busy} onClick={() => { setForm(null); setFormError(null) }}>Cancelar</button>
-            <button className="btn btn-primary" disabled={busy || !form.start || !form.end || form.people < 1} onClick={addClass}>Guardar clase</button>
-          </>}>
-          <div className="flex flex-col gap-3">
-            <p className="text-sm text-slate-300">Todos los {['lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábados'][form.day]}, se repite cada semana.</p>
+          footer={<div className="grid w-full grid-cols-2 gap-3">
+            <button className="btn btn-secondary justify-center" disabled={busy} onClick={() => { setForm(null); setFormError(null) }}>Cancelar</button>
+            <button className="btn btn-primary justify-center" disabled={busy || !form.start || !form.end || form.people < 1} onClick={addClass}>Guardar clase</button>
+          </div>}>
+          <div className="flex flex-col gap-4">
+            <div>
+              <span className="field-label">Frecuencia</span>
+              <div className="segmented grid w-full grid-cols-2 p-0.5" role="radiogroup" aria-label="Frecuencia">
+                {([['weekly', `Todos los ${DAYS_LONG[form.day]}`], ['once', `Solo el ${dayLabel(form.day)}`]] as const).map(([v, label]) => (
+                  <button key={v} type="button" role="radio" aria-checked={form.repeat === v} onClick={() => setForm({ ...form, repeat: v })}
+                    className={`segmented-item justify-center px-2 py-1.5 text-xs ${form.repeat === v ? 'segmented-item-active' : ''}`}>{label}</button>
+                ))}
+              </div>
+            </div>
             <div className="grid grid-cols-2 gap-3">
               <label><span className="field-label">Inicio</span>
                 <input type="time" className="field" value={form.start} step={900} onChange={e => setForm({ ...form, start: e.target.value })} />
@@ -163,16 +186,20 @@ export default function RoomWeek({ room }: { room: Room | undefined }) {
       )}
       {selected && (
         <Dialog size="sm" title="¿Eliminar esta clase?" onClose={() => { setSelected(null); setFormError(null) }}
-          footer={<>
-            <button className="btn btn-secondary ml-auto" disabled={busy} onClick={() => { setSelected(null); setFormError(null) }}>Cancelar</button>
-            <button className="btn btn-danger" disabled={busy} onClick={removeClass}><Trash2 size={14} /> Eliminar clase</button>
-          </>}>
+          footer={<div className="grid w-full grid-cols-2 gap-3">
+            <button className="btn btn-secondary justify-center" disabled={busy} onClick={() => { setSelected(null); setFormError(null) }}>Cancelar</button>
+            <button className="btn btn-danger justify-center" disabled={busy} onClick={removeClass}><Trash2 size={14} /> Eliminar</button>
+          </div>}>
           <dl className="grid grid-cols-[6rem_1fr] gap-y-2 text-sm">
-            <dt className="text-slate-400">Día</dt><dd className="text-slate-100">Todos los {['lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábados'][selected.day]}</dd>
+            <dt className="text-slate-400">Cuándo</dt>
+            <dd className="text-slate-100">{selected.isClass ? `Todos los ${DAYS_LONG[selected.day]}` : `Solo el ${dayLabel(selected.day)}`}</dd>
             <dt className="text-slate-400">Horario</dt><dd className="tabular-nums text-slate-100">{selected.head}</dd>
-            <dt className="text-slate-400">Personas</dt><dd className="text-slate-100">{selected.sub}</dd>
+            <dt className="text-slate-400">Personas</dt><dd className="text-slate-100">{selected.sub.split(' · ')[0]}</dd>
           </dl>
-          <p className="mt-3 text-xs text-slate-400">Se quita de todas las semanas. El control y el pronóstico dejarán de contar con esta clase.</p>
+          <p className="mt-3 text-xs leading-relaxed text-slate-400">
+            {selected.isClass ? 'Se quita de todas las semanas. ' : 'Se quita solo de esta fecha. '}
+            En ese horario el control predictivo ya no encenderá el ventilador por adelantado; el pronóstico se sigue calculando.
+          </p>
           {formError && <p className="mt-2 text-sm text-red-300">{formError}</p>}
         </Dialog>
       )}
@@ -210,10 +237,10 @@ export default function RoomWeek({ room }: { room: Room | undefined }) {
                 ))}
                 {col.map(b => (
                   <div key={b.key} title={b.tip}
-                    role={isAdmin && b.isClass ? 'button' : undefined} tabIndex={isAdmin && b.isClass ? 0 : undefined}
+                    role={isAdmin && b.id != null ? 'button' : undefined} tabIndex={isAdmin && b.id != null ? 0 : undefined}
                     onPointerDown={e => e.stopPropagation()}
-                    onClick={isAdmin && b.isClass ? () => { setForm(null); setFormError(null); setSelected({ ...b, day: days[i] }) } : undefined}
-                    className={`absolute inset-x-1 flex overflow-hidden rounded-md border bg-slate-800 px-2 ${isAdmin && b.isClass ? 'cursor-pointer hover:border-slate-500 ' : ''}${selected?.key === b.key ? 'ring-1 ring-blue-500 ' : ''}${b.b - b.a <= 60 ? 'items-center' : 'flex-col gap-0.5 py-1'} ${b.dashed ? 'border-dashed border-slate-500' : 'border-slate-700'}`}
+                    onClick={isAdmin && b.id != null ? () => { setForm(null); setFormError(null); setSelected({ ...b, day: days[i] }) } : undefined}
+                    className={`absolute inset-x-1 flex overflow-hidden rounded-md border bg-slate-800 px-2 ${isAdmin && b.id != null ? 'cursor-pointer hover:border-slate-500 ' : ''}${selected?.key === b.key ? 'ring-1 ring-blue-500 ' : ''}${b.b - b.a <= 60 ? 'items-center' : 'flex-col gap-0.5 py-1'} ${b.dashed ? 'border-dashed border-slate-500' : 'border-slate-700'}`}
                     style={{ top: `calc(${top(b.a)} + 2px)`, height: `calc(${height(b.a, b.b)} - 4px)` }}>
                     {b.b - b.a <= 60
                       ? <span className="truncate text-xs text-slate-300"><span className="font-medium text-slate-100">{b.line.split(' · ')[0]}</span> · {b.line.split(' · ').slice(1).join(' · ')}</span>
