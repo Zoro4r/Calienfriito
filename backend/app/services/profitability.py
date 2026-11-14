@@ -1,8 +1,7 @@
 """Fan hours and energy per room: our control against the fan always on.
 
-Reference ("sin el sistema"): the fan at full power for the whole building day
-(BUILDING_FROM–BUILDING_TO, Monday–Saturday), as a room fan is usually switched on in
-the morning and left on. With the system: the fan runs only when the room is in use and
+Reference ("sin el sistema"): the fan at full power at all hours (24 h, every day),
+the simplest way to keep a room ventilated without any control. With the system: the fan runs only when the room is in use and
 warm, at the power it needs, as the month-long simulation of each room recorded for the
 rules and for the predictive controller.
 
@@ -15,8 +14,8 @@ from datetime import datetime, timedelta
 from app.config import LOCAL_UTC_OFFSET_HOURS
 
 MONTH_DAYS = 30
-BUILDING_FROM, BUILDING_TO = 7, 22          # local hours the building is open
-BUILDING_WEEKDAYS = 6                       # Monday–Saturday
+BUILDING_FROM, BUILDING_TO = 0, 24          # "a todas horas": the fan never stops
+BUILDING_WEEKDAYS = 7                       # every day
 FAN_W = 180.0                               # wall extractor sized for a classroom (1800 m³/h, EC motor)
 ON_LEVEL = 0.01                             # a fan level above this counts as "on"
 

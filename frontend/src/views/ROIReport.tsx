@@ -83,7 +83,7 @@ export default function ROIReport() {
     hour: h,
     always: Math.round(rooms.reduce((s, r) => s + (r.day_reference[h] ?? 0), 0) * kw * 1000),
     ours: Math.round(rooms.reduce((s, r) => s + ((learning(r) ? r.day_learning : r.day_rules)[h] ?? 0), 0) * kw * 1000),
-  })).filter(d => d.hour >= 6 && d.hour <= 22)
+  }))
 
   return (
     <div className="flex flex-col gap-4 lg:h-full lg:min-h-0">
@@ -110,7 +110,7 @@ export default function ROIReport() {
         <>
           <div className="grid shrink-0 gap-4 md:grid-cols-2">
             <Side title="Ventilador a todas horas" dot={ALWAYS} kwh={alwaysKwh} cost={alwaysKwh * t} hours={alwaysH}
-              note={`Al 100 % de ${hh(data.building.from)} a ${hh(data.building.to)}, ${data.building.days}, haya o no clase.`} />
+              note={data.building.from === 0 && data.building.to === 24 ? 'Al 100 % las 24 horas, todos los días, haya o no clase.' : `Al 100 % de ${hh(data.building.from)} a ${hh(data.building.to)}, ${data.building.days}, haya o no clase.`} />
             <Side title="Con Calienfriito" dot={OURS} kwh={oursKwh} cost={oursKwh * t} hours={oursH}
               note="Solo con el aula ocupada y sobre 24,5 °C, a la potencia necesaria." />
           </div>

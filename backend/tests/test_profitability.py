@@ -13,11 +13,10 @@ def row(ts, fan=0.0, occupied=False):
     return {"ts": ts, "fan": fan, "occupied": occupied}
 
 
-def test_building_day_is_7_to_22_monday_to_saturday():
+def test_always_on_means_every_hour_of_every_day():
     assert in_building_day(MONDAY_8_LOCAL)
-    assert not in_building_day(datetime(2026, 11, 9, 11, 0))          # 06:00 local
-    assert not in_building_day(datetime(2026, 11, 10, 3, 30))         # 22:30 local, Monday
-    assert not in_building_day(datetime(2026, 11, 15, 15, 0))         # Sunday
+    assert in_building_day(datetime(2026, 11, 9, 8, 0))               # 03:00 local
+    assert in_building_day(datetime(2026, 11, 15, 15, 0))             # Sunday
 
 
 def test_fan_usage_counts_on_hours_and_cube_energy():

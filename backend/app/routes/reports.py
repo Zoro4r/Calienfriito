@@ -49,7 +49,7 @@ async def get_roi(
     return {
         "tariff": {"pen_per_kwh": pf.TARIFF_PEN_PER_KWH, "label": pf.TARIFF_LABEL},
         "fan_w": pf.FAN_W,
-        "building": {"from": pf.BUILDING_FROM, "to": pf.BUILDING_TO, "days": "lunes a sábado"},
+        "building": {"from": pf.BUILDING_FROM, "to": pf.BUILDING_TO, "days": "todos los días"},
         "month_days": pf.MONTH_DAYS,
         "real_days": pf.REAL_DAYS,
         "rooms": sorted(rooms, key=lambda r: r["room_id"]),
