@@ -147,7 +147,28 @@ async def simulation_series(db, room_id: str, meta: dict, range_key: str, anchor
     }
 
 
+# (sensors, range, anchor) -> (computed at, result). Today's data changes every second, but
+# the tab polls every 30 s: a minute-old result is fine. Past periods never change.
+_LIVE_CACHE: dict[tuple, tuple[datetime, dict | None]] = {}
+LIVE_CACHE_S = 60
+
+
 async def live_series(db, sensors: list[str], range_key: str, anchor: date | None = None) -> dict | None:
+    key = (tuple(sorted(sensors)), range_key, anchor)
+    now = datetime.utcnow()
+    hit = _LIVE_CACHE.get(key)
+    if hit:
+        ended = bool(hit[1]) and datetime.fromisoformat(hit[1]["end"]) <= hit[0]   # a past period: final
+        if ended or (now - hit[0]).total_seconds() < LIVE_CACHE_S:
+            return hit[1]
+    result = await _live_series(db, sensors, range_key, anchor)
+    if len(_LIVE_CACHE) > 200:
+        _LIVE_CACHE.clear()
+    _LIVE_CACHE[key] = (now, result)
+    return result
+
+
+async def _live_series(db, sensors: list[str], range_key: str, anchor: date | None = None) -> dict | None:
     bucket_min = BUCKET_MIN[range_key]
     base = {"sensor_id": {"$in": sensors}, "node_state.accion": {"$exists": True}}
     last = await db["sensor_readings"].find(base, {"timestamp": 1}).sort("timestamp", -1).limit(1).to_list(length=1)
@@ -163,34 +184,40 @@ async def live_series(db, sensors: list[str], range_key: str, anchor: date | Non
     fan = {"$divide": [{"$ifNull": ["$node_state.ventilador_pwm", 0]}, 255]}
     heat = {"$cond": ["$node_state.calefactor", 1, 0]}
     occupied = {"$ne": ["$node_state.accion", "DISABLED"]}   # the firmware's own occupancy decision
-    rows = await db["sensor_readings"].aggregate([
+    # One pass over the period's readings (~86 000 a day at 1 Hz): buckets, totals and
+    # occupied minutes come out of the same scan.
+    facets = await db["sensor_readings"].aggregate([
         {"$match": match},
-        {"$group": {
-            "_id": {"b": {"$dateTrunc": {"date": ts, "unit": "minute", "binSize": bucket_min}}},
-            "temp": {"$avg": "$temperature"}, "fan": {"$avg": fan}, "heat": {"$avg": heat},
-            "lfan": {"$avg": {"$divide": ["$learning_action.fan_pct", 100]}},
-            "lheat": {"$avg": {"$divide": ["$learning_action.heater_pct", 100]}},
-            "pred": {"$avg": "$learning_action.forecast_30"},
+        {"$addFields": {"_t": ts, "_fan": fan, "_heat": heat, "_occ": occupied}},
+        {"$facet": {
+            "rows": [
+                {"$group": {
+                    "_id": {"b": {"$dateTrunc": {"date": "$_t", "unit": "minute", "binSize": bucket_min}}},
+                    "temp": {"$avg": "$temperature"}, "fan": {"$avg": "$_fan"}, "heat": {"$avg": "$_heat"},
+                    "lfan": {"$avg": {"$divide": ["$learning_action.fan_pct", 100]}},
+                    "lheat": {"$avg": {"$divide": ["$learning_action.heater_pct", 100]}},
+                    "pred": {"$avg": "$learning_action.forecast_30"},
+                }},
+                {"$sort": {"_id.b": 1}},
+            ],
+            "totals": [
+                {"$group": {
+                    "_id": None, "n": {"$sum": 1},
+                    "occ": {"$sum": {"$cond": ["$_occ", 1, 0]}},
+                    "out": {"$sum": {"$cond": [{"$and": ["$_occ", _out_of_band("$temperature")]}, 1, 0]}},
+                    "hot": {"$sum": {"$cond": [{"$and": ["$_occ", _hot("$temperature")]}, 1, 0]}},
+                    "fan3": {"$sum": {"$pow": ["$_fan", 3]}}, "heat": {"$sum": "$_heat"},
+                    "lfan3": {"$sum": {"$pow": [{"$divide": [{"$ifNull": ["$learning_action.fan_pct", 0]}, 100]}, 3]}},
+                    "lheat": {"$sum": {"$divide": [{"$ifNull": ["$learning_action.heater_pct", 0]}, 100]}},
+                    "first": {"$min": "$timestamp"},
+                }},
+            ],
+            "minutes": [
+                {"$group": {"_id": {"$dateTrunc": {"date": "$_t", "unit": "minute"}}, "occ": {"$max": "$_occ"}}},
+            ],
         }},
-        {"$sort": {"_id.b": 1}},
     ]).to_list(length=None)
-    totals = await db["sensor_readings"].aggregate([
-        {"$match": match},
-        {"$group": {
-            "_id": None, "n": {"$sum": 1},
-            "occ": {"$sum": {"$cond": [occupied, 1, 0]}},
-            "out": {"$sum": {"$cond": [{"$and": [occupied, _out_of_band("$temperature")]}, 1, 0]}},
-            "hot": {"$sum": {"$cond": [{"$and": [occupied, _hot("$temperature")]}, 1, 0]}},
-            "fan3": {"$sum": {"$pow": [fan, 3]}}, "heat": {"$sum": heat},
-            "lfan3": {"$sum": {"$pow": [{"$divide": [{"$ifNull": ["$learning_action.fan_pct", 0]}, 100]}, 3]}},
-            "lheat": {"$sum": {"$divide": [{"$ifNull": ["$learning_action.heater_pct", 0]}, 100]}},
-            "first": {"$min": "$timestamp"},
-        }},
-    ]).to_list(length=None)
-    minutes = await db["sensor_readings"].aggregate([
-        {"$match": match},
-        {"$group": {"_id": {"$dateTrunc": {"date": ts, "unit": "minute"}}, "occ": {"$max": occupied}}},
-    ]).to_list(length=None)
+    rows, totals, minutes = facets[0]["rows"], facets[0]["totals"], facets[0]["minutes"]
     t = totals[0] if totals else None
     step_s = 1.0
     if t and t["n"] > 1:
@@ -239,3 +266,56 @@ def forecast_accuracy(rows: list[dict], bucket_min: int) -> dict | None:
         "mae": round(sum(err) / len(err), 2) if err else None,
         "mae_baseline": round(sum(err_base) / len(err_base), 2) if err_base else None,
     }
+
+
+WARM_EVERY_S = 50
+_warm_task = None
+
+
+async def warm_live_cache(db, sensor_groups: list[list[str]]) -> int:
+    """Compute today's series for the rooms whose node reported in the last 2 minutes, so
+    opening the Aprendizaje tab finds it ready instead of scanning a day of readings."""
+    recent = (datetime.utcnow() - timedelta(minutes=2)).strftime("%Y-%m-%dT%H:%M:%S")
+    done = 0
+    for sensors in sensor_groups:
+        if await db["sensor_readings"].find_one({"sensor_id": {"$in": sensors}, "timestamp": {"$gte": recent}}, {"_id": 1}):
+            _LIVE_CACHE.pop((tuple(sorted(sensors)), "1d", None), None)
+            await live_series(db, sensors, "1d")
+            done += 1
+    return done
+
+
+def start_warm_loop() -> None:
+    """Background loop: keep today's live series fresh for rooms with an active node."""
+    import asyncio
+    import logging
+    from collections import defaultdict
+    from starlette.concurrency import run_in_threadpool
+    from app.database import get_db
+    from app.database_sql import SessionLocal
+    from app.models.admin import SensorDevice
+
+    global _warm_task
+    if _warm_task is not None:
+        return
+
+    def groups() -> list[list[str]]:
+        s = SessionLocal()
+        try:
+            by_room: dict[str, list[str]] = defaultdict(list)
+            for d in s.query(SensorDevice).all():
+                if d.room_id:
+                    by_room[d.room_id].append(d.id)
+            return list(by_room.values())
+        finally:
+            s.close()
+
+    async def _run():
+        while True:
+            try:
+                await warm_live_cache(get_db(), await run_in_threadpool(groups))
+            except Exception:
+                logging.getLogger(__name__).exception("Warming the Aprendizaje cache failed")
+            await asyncio.sleep(WARM_EVERY_S)
+
+    _warm_task = asyncio.get_event_loop().create_task(_run())

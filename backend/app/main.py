@@ -64,6 +64,8 @@ async def startup_learning_loop():
     start_learning_loop()
     from app.services.forecast_controller import warm_up
     warm_up()
+    from app.services.strategy_series import start_warm_loop
+    start_warm_loop()
 
 
 @app.on_event("shutdown")
