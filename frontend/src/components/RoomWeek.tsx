@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ChevronLeft, ChevronRight, Trash2 } from 'lucide-react'
 import { Dialog } from './ui'
 import { useAuth } from '../context/AuthContext'
@@ -6,8 +6,8 @@ import api, { getApiErrorDetail } from '../api/client'
 import { localDay, shiftDay } from './DayNav'
 import { locationLabel, shortName, type Room } from '../utils/rooms'
 
-// One room's week: weekly classes and that week's reservations, Monday to Saturday, with
-// week navigation. Used by Horarios (with its room list) and by Aulas → Horarios.
+// One room's week, the whole 24 h (scrolls, opens at 07:00): weekly classes and that week's
+// reservations, Monday to Saturday, with week navigation. Used by Horarios (with its room list) and by Aulas → Horarios.
 // Data: GET /admin/occupancy/week. Admins add weekly classes (day, hours, expected people)
 // by dragging over a day (a dialog then asks for the expected people) and remove one by
 // clicking it: POST / DELETE /admin/rooms/{id}/schedules.
@@ -15,7 +15,9 @@ import { locationLabel, shortName, type Room } from '../utils/rooms'
 interface Block { id?: number | null; room_id: string; day: number; start: string; end: string; kind: 'class' | 'reservation'; people: number; by: string | null }
 interface Week { week_start: string; blocks: Block[] }
 
-const H0 = 7, H1 = 22                        // visible hours
+const H0 = 0, H1 = 24                        // the whole day; the grid scrolls
+const HOUR_PX = 44                           // height of one hour
+const SCROLL_TO_H = 7                        // opens at 07:00
 const DAY_NAMES = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom']
 
 const minutes = (hm: string) => { const [h, m] = hm.split(':').map(Number); return h * 60 + m }
@@ -35,6 +37,9 @@ export default function RoomWeek({ room }: { room: Room | undefined }) {
   const [anchor, setAnchor] = useState(() => mondayOf(localDay(Date.now())))
   const [error, setError] = useState<string | null>(null)
   const [now, setNow] = useState(Date.now())
+  const scrollRef = useRef<HTMLDivElement>(null)
+  // The grid holds the whole day; open it at the start of the school day.
+  useEffect(() => { if (scrollRef.current) scrollRef.current.scrollTop = SCROLL_TO_H * HOUR_PX - 8 }, [room?.id])
   const { user } = useAuth()
   const isAdmin = user?.role === 'admin'
   const [version, setVersion] = useState(0)                 // bump to reload the week
@@ -56,6 +61,8 @@ export default function RoomWeek({ room }: { room: Room | undefined }) {
     if (!drag) return
     let a = Math.min(drag.from, drag.to), b = Math.max(drag.from, drag.to)
     if (b - a < 30) b = Math.min(H1 * 60, a + 60)          // a click or a short drag: one hour
+    b = Math.min(b, H1 * 60 - 1)                            // 24:00 is written 23:59
+    a = Math.min(a, b - 15)
     setDrag(null); setFormError(null)
     setForm({ day: drag.day, start: hm(a), end: hm(b), people: Math.min(25, cap || 25) })
   }
@@ -170,7 +177,8 @@ export default function RoomWeek({ room }: { room: Room | undefined }) {
         </Dialog>
       )}
       {error && <p className="px-4 py-2 text-sm text-red-300">{error}</p>}
-          <div className="grid shrink-0 border-b border-slate-800" style={{ gridTemplateColumns: `3.5rem repeat(${days.length}, minmax(0, 1fr))` }}>
+        <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
+          <div className="sticky top-0 z-20 grid border-b border-slate-800 bg-slate-900" style={{ gridTemplateColumns: `3.5rem repeat(${days.length}, minmax(0, 1fr))` }}>
             <span />
             {days.map(d => (
               <span key={d} className={`border-l border-slate-800 px-2.5 py-2 text-xs ${d === todayIdx ? 'font-semibold text-slate-100' : 'text-slate-400'}`}>
@@ -178,7 +186,7 @@ export default function RoomWeek({ room }: { room: Room | undefined }) {
               </span>
             ))}
           </div>
-          <div className="relative grid min-h-0 flex-1" style={{ gridTemplateColumns: `3.5rem repeat(${days.length}, minmax(0, 1fr))` }}>
+          <div className="relative grid" style={{ height: `${(H1 - H0) * HOUR_PX}px`, gridTemplateColumns: `3.5rem repeat(${days.length}, minmax(0, 1fr))` }}>
             <div className="relative">
               {Array.from({ length: H1 - H0 }, (_, i) => (
                 <span key={i} className="absolute right-2 -translate-y-1/2 text-xs tabular-nums text-slate-500" style={{ top: top((H0 + i) * 60) }}>
@@ -221,6 +229,7 @@ export default function RoomWeek({ room }: { room: Room | undefined }) {
               </div>
             ))}
           </div>
+        </div>
     </div>
   )
 }
