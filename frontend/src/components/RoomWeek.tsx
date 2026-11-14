@@ -66,7 +66,7 @@ export default function RoomWeek({ room }: { room: Room | undefined }) {
     b = Math.min(b, H1 * 60 - 1)                            // 24:00 is written 23:59
     a = Math.min(a, b - 15)
     setDrag(null); setFormError(null)
-    setForm({ day: drag.day, start: hm(a), end: hm(b), people: Math.min(25, cap || 25), repeat: 'weekly' })
+    setForm({ day: drag.day, start: hm(a), end: hm(b), people: 1, repeat: 'weekly' })
   }
 
   // "lunes 16 de noviembre" for a column of the week on screen.
