@@ -183,8 +183,9 @@ class Predictive:
     an empty decision hands the node back to its rules ("auto")."""
     name = "Control predictivo"
 
-    def __init__(self, act: "Actuators", expected: np.ndarray | None = None, forecaster=None) -> None:
-        self.ctrl = ForecastController(forecaster or default_forecaster())
+    def __init__(self, act: "Actuators", expected: np.ndarray | None = None, forecaster=None,
+                 forecast_idle: bool = True) -> None:
+        self.ctrl = ForecastController(forecaster or default_forecaster(), forecast_idle=forecast_idle)
         self.rules = Rules()
         self.expected = expected        # timetable per step (expected people); None = unknown
         self.preds: list[tuple[int, float, float]] = []   # (target step, forecast, temp when forecast)

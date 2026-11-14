@@ -125,8 +125,11 @@ def warm_up() -> None:
 
 
 class ForecastController:
-    def __init__(self, forecaster: Optional[Forecaster] = None) -> None:
+    def __init__(self, forecaster: Optional[Forecaster] = None, forecast_idle: bool = True) -> None:
         self.forecaster = forecaster or default_forecaster()
+        # Live it forecasts always (the dashboard shows it); a simulation can skip the
+        # forecasts while the room is not in use, since they would not act anyway.
+        self.forecast_idle = forecast_idle
         self.history: list[float] = []
         self.bucket: Optional[int] = None          # current minute (epoch minutes)
         self._acc: list[float] = []
@@ -156,8 +159,11 @@ class ForecastController:
                 self.history.append(fmean(self._acc))
                 self.history = self.history[-CONTEXT_MIN:]
             self.bucket, self._acc, self.closed_minute = minute, [], True
-            if self.ready and (self.last_decision is None or minute - self.last_decision >= DECIDE_EVERY_MIN):
+            due = self.last_decision is None or minute - self.last_decision >= DECIDE_EVERY_MIN
+            if self.ready and due and (self.forecast_idle or in_use):
                 self.decide(minute, bool(in_use))
+            elif not in_use:
+                self.fan_pct = 0
         if temp is not None:
             self._acc.append(float(temp))
 

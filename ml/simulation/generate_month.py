@@ -55,7 +55,24 @@ def room_schedules(room_id: str) -> list[tuple[int, time, time, int]]:
         db.close()
 
 
-def build_scenario(start_local: datetime, n: int, room: cs.Room, rows, seed: int) -> dict:
+def room_reservations(room_id: str, start_local: datetime, end_local: datetime) -> list[tuple[datetime, datetime, int]]:
+    """One-day classes (reservations) of the room inside the simulated window, local time."""
+    try:
+        from app.database_sql import SessionLocal
+        from app.models.admin import Reservation
+    except ImportError:
+        return []
+    db = SessionLocal()
+    try:
+        return [(r.start_time, r.end_time, r.expected_occupancy)
+                for r in db.query(Reservation).filter(Reservation.room_id == room_id,
+                                                      Reservation.start_time < end_local,
+                                                      Reservation.end_time > start_local).all()]
+    finally:
+        db.close()
+
+
+def build_scenario(start_local: datetime, n: int, room: cs.Room, rows, seed: int, one_off=()) -> dict:
     rng = np.random.default_rng(seed)
     people = np.zeros(n)
     expected = np.zeros(n)            # timetable: group size for the whole class (what the controller knows)
@@ -82,6 +99,14 @@ def build_scenario(start_local: datetime, n: int, room: cs.Room, rows, seed: int
             for i in range(max(0, s), min(n, e)):
                 k = min(1.0, (i - s + 1) / ramp_in, (e - i) / ramp_out)
                 people[i] = max(people[i], round(count * k))
+    # One-day classes: exactly when they were booked, with the people given.
+    for start_dt, end_dt, group in one_off:
+        s = int((start_dt - start_local).total_seconds() // STEP)
+        e = int((end_dt - start_local).total_seconds() // STEP)
+        expected[max(0, s):min(n, e)] = np.maximum(expected[max(0, s):min(n, e)], group)
+        for i in range(max(0, s), min(n, e)):
+            k = min(1.0, (i - s + 1) / (10 * cs.STEPS_PER_MIN), (e - i) / (5 * cs.STEPS_PER_MIN))
+            people[i] = max(people[i], round(min(room.capacity, group) * k))
     return {"people": people, "expected": expected, "tout": tout,
             "t_noise": rng.normal(0, 0.15, n), "co2_noise": rng.normal(0, 25, n)}
 
@@ -122,13 +147,15 @@ def main() -> None:
     start_local = datetime.combine((now_local - timedelta(days=args.days)).date(), time(0, 0))
     n = int((now_local - start_local).total_seconds() // STEP)
     rows = timetable(room_schedules(room_id))
-    if not rows:
-        raise SystemExit(f"{room_id} has no classes in the database: run ml/seed-data/generate_dataset.py first")
-    sc = build_scenario(start_local, n, room, rows, args.seed)
+    one_off = room_reservations(room_id, start_local, now_local)
+    if not rows and not one_off:
+        raise SystemExit(f"{room_id} has no classes in the simulated days: add them in Aulas → Horarios")
+    sc = build_scenario(start_local, n, room, rows, args.seed, one_off)
 
     warm_s = cs.WARMUP_DAYS * 24 * 3600
     rules_log = cs.simulate(cs.Rules(), sc, room, act, args.days)
-    learn_log = cs.simulate(cs.Predictive(act, expected=sc["expected"]), sc, room, act, args.days)
+    # Forecasts only around classes: elsewhere the controller would not act (much faster).
+    learn_log = cs.simulate(cs.Predictive(act, expected=sc["expected"], forecast_idle=False), sc, room, act, args.days)
 
     db = MongoClient(MONGO_URI)["climate_db"]
     if not args.no_readings:
@@ -182,7 +209,7 @@ def main() -> None:
         "step_s": STEP * args.every,
         "warmup_days": cs.WARMUP_DAYS,
         "equipment": {"label": act.label, "fan_max_m3s": act.fan_max_m3s, "fan_max_w": act.fan_max_w, "heater_w": act.heater_w},
-        "timetable": "Horario de clases del aula (lunes a sábado, base de datos)",
+        "timetable": "Horario del aula: clases semanales y de un solo día (base de datos)",
         "seed": args.seed,
     }, upsert=True)
 

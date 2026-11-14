@@ -115,3 +115,15 @@ def test_forecast_accuracy_scores_model_and_baseline_on_the_same_pairs():
     out = forecast_accuracy(rows, 5)
     assert out["mae"] == 0.0 and out["mae_baseline"] == 0.6 and out["pairs"] == 6
     assert forecast_accuracy(rows, 120) is None
+
+
+def test_simulation_mode_skips_forecasts_while_the_room_is_idle():
+    calls = []
+    def counting(history, horizon):
+        calls.append(1)
+        return persistence(history, horizon)
+    ctrl = ForecastController(counting, forecast_idle=False)
+    feed(ctrl, READY_MINUTES + 20, in_use=False)
+    assert calls == [] and ctrl.fan_pct == 0
+    feed(ctrl, 6, in_use=True, start_min=READY_MINUTES + 20)
+    assert calls                                      # forecasts again once the room is in use
