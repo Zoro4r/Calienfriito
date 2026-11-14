@@ -84,6 +84,7 @@ async def room_usage(db, meta: dict) -> dict:
     return {
         "room_id": meta["_id"],
         "copied_from": meta.get("copied_from"),
+        "source": "simulated",
         "days": round(days, 1),
         "class_hours": r1(rules["class_hours"]),
         "reference_hours": r1(rules["reference_hours"]),
@@ -96,3 +97,87 @@ async def room_usage(db, meta: dict) -> dict:
         "day_rules": per_day(rules["eq_by_hour"]),
         "day_learning": per_day(learning["eq_by_hour"]),
     }
+
+
+# ── Rooms with a real node: measured temperature + timetable ──────────────────
+# The heuristic is applied to what the node really measured, minute by minute, during
+# the room's classes (weekly and one-day). No thermal model: closer to the real room.
+REAL_DAYS = 7
+REAL_CACHE_S = 600
+_REAL_CACHE: dict[str, tuple[datetime, dict]] = {}
+
+
+def rules_level(temp_c: float) -> float:
+    """Firmware rules for an occupied room: 50 / 75 / 100 % from 24.5 / 25.0 / 25.5 °C."""
+    if temp_c >= 25.5:
+        return 1.0
+    if temp_c >= 25.0:
+        return 0.75
+    if temp_c >= 24.5:
+        return 0.5
+    return 0.0
+
+
+def occupancy(weekly: list[tuple[int, object, object]], one_off: list[tuple[datetime, datetime]]):
+    """occupied(local datetime) for weekly classes (weekday, start time, end time) and
+    one-day classes (start, end), all in local time."""
+    def occupied(local: datetime) -> bool:
+        t = local.time()
+        return any(local.weekday() == d and s <= t < e for d, s, e in weekly) or any(s <= local < e for s, e in one_off)
+    return occupied
+
+
+def minute_usage(minutes: list[dict], occupied) -> dict:
+    """Fan use per strategy from one row per minute ({ts: naive UTC, temp, lfan: % or None}).
+
+    Rules: the heuristic on the measured temperature while a class is on. Predictive: the
+    shadow controller's recorded decision when there is one, else the rules' level."""
+    h = 1 / 60
+    out = {"reference_hours": 0.0, "class_hours": 0.0,
+           "rules_hours": 0.0, "rules_eq_hours": 0.0, "learning_hours": 0.0, "learning_eq_hours": 0.0,
+           "day_reference": [0.0] * 24, "day_rules": [0.0] * 24, "day_learning": [0.0] * 24}
+    for m in minutes:
+        local = m["ts"] + _OFFSET
+        if in_building_day(m["ts"]):
+            out["reference_hours"] += h
+            out["day_reference"][local.hour] += h
+        if not occupied(local) or m.get("temp") is None:
+            continue
+        out["class_hours"] += h
+        rules = rules_level(m["temp"])
+        learn = m["lfan"] / 100 if m.get("lfan") is not None else rules
+        for key, lvl in (("rules", rules), ("learning", learn)):
+            if lvl > ON_LEVEL:
+                out[f"{key}_hours"] += h
+            out[f"{key}_eq_hours"] += lvl ** 3 * h
+            out[f"day_{key}"][local.hour] += lvl ** 3 * h
+    return out
+
+
+async def real_room_usage(db, room_id: str, sensors: list[str], weekly, one_off, now: datetime | None = None) -> dict | None:
+    """Monthly fan hours for a room with a real node, from its last REAL_DAYS of readings."""
+    now = now or datetime.utcnow()
+    hit = _REAL_CACHE.get(room_id)
+    if hit and (now - hit[0]).total_seconds() < REAL_CACHE_S:
+        return hit[1]
+    start_local = datetime.combine((now + _OFFSET).date() - timedelta(days=REAL_DAYS - 1), datetime.min.time())
+    start_utc = start_local - _OFFSET
+    rows = await db["sensor_readings"].aggregate([
+        {"$match": {"sensor_id": {"$in": sensors}, "is_simulated": False,
+                    "timestamp": {"$gte": start_utc.strftime("%Y-%m-%dT%H:%M:%S")}}},
+        {"$group": {"_id": {"$substrBytes": ["$timestamp", 0, 16]},
+                    "temp": {"$avg": "$temperature"}, "lfan": {"$avg": "$learning_action.fan_pct"}}},
+    ]).to_list(length=None)
+    if not rows:
+        return None
+    minutes = [{"ts": datetime.fromisoformat(r["_id"]), "temp": r.get("temp"), "lfan": r.get("lfan")} for r in rows]
+    u = minute_usage(minutes, occupancy(weekly, one_off))
+    days = max((now - start_utc).total_seconds() / 86400, 1)
+    scale = MONTH_DAYS / days
+    result = {
+        "room_id": room_id, "copied_from": None, "source": "real", "days": round(days, 1),
+        **{k: round(v * scale, 1) for k, v in u.items() if not k.startswith("day_")},
+        **{k: [round(x / days, 4) for x in v] for k, v in u.items() if k.startswith("day_")},
+    }
+    _REAL_CACHE[room_id] = (now, result)
+    return result
