@@ -6,7 +6,8 @@ import { AXIS } from '../components/NodeLive'
 
 // Rentabilidad, kept simple: what the fan costs in a month left on all day against
 // running only when the heuristic asks for it, and when in the day that energy goes.
-// Hours come from the month-long simulation of each room with its timetable.
+// Hours come from the node's measured temperature and the room's timetable (real rooms)
+// or from the month-long simulation (rooms without a node).
 
 interface RoomUsage {
   room_id: string
@@ -26,6 +27,8 @@ interface RoiData {
   fan_w: number
   building: { from: number; to: number; days: string }
   rooms: RoomUsage[]
+  simulated: boolean
+  real_days: number
 }
 
 const ALWAYS = '#64748b'
@@ -145,7 +148,7 @@ export default function ROIReport() {
             <input className="field h-7 w-16 px-2 py-0 text-xs" inputMode="decimal" value={watts} onChange={e => setWatts(e.target.value)} aria-label="Potencia del ventilador en W" /> W
             · tarifa S/
             <input className="field h-7 w-20 px-2 py-0 text-xs" inputMode="decimal" value={tariff} onChange={e => setTariff(e.target.value)} aria-label="Tarifa en soles por kWh" /> por kWh
-            ({data.tariff.label}) · Un mes simulado con el horario de clases de cada aula.
+            ({data.tariff.label}) · {data.simulated ? 'Un mes simulado con el horario de clases de cada aula.' : `Temperatura medida por el nodo y horario del aula de los últimos ${data.real_days} días, llevados a un mes.`}
           </p>
         </>
       )}
