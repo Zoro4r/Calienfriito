@@ -1,0 +1,18 @@
+Informe P2 - Calienfriito (CS5055 Internet of Things, UTEC 2026-2)
+
+Contenido
+  informe_p2.tex   documento principal
+  figuras/         capturas, fotos, planos y esquemático de la PCB
+  datos/           CSV usados por los gráficos (pgfplots)
+  informe_p2.pdf   versión ya compilada, como referencia
+
+Cómo compilarlo
+  Overleaf: New Project > Upload Project > subir este .zip.
+            Menu > Compiler: pdfLaTeX. Compilar (las referencias cruzadas
+            se resuelven en la segunda pasada, Overleaf lo hace solo).
+  Local:    pdflatex informe_p2.tex   (dos veces)
+            Requiere una distribución LaTeX con tikz, pgfplots, babel (spanish),
+            lmodern, fancyvrb, tabularx, booktabs, subcaption y hyperref.
+
+Pendiente antes de entregar
+  - Pasar el PDF por Turnitin (similitud < 20 %).

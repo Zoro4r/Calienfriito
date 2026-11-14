@@ -9,8 +9,9 @@ learn each room's thermal behavior directly, instead of memorizing an arbitrary 
 
 `thermal_factor` is the multiplier applied to the cooling-demand label; the metadata
 above is engineered to correlate with it, so a model given the metadata can recover
-the factor. Seed generator, extract_data and predictive_service all import THIS
-module, so room physics is defined in exactly one place.
+the factor. Seed generator, extract_data and predictive_service import these
+fallback profiles; a registered room's dimensions override the estimated volume
+at inference.
 
 Values are plausible estimates for UTEC Barranco (no on-site survey); adjust when
 real floor plans / A/C nameplates are available.

@@ -70,6 +70,7 @@ export async function ensureNodeSensor(roomId: string) {
 // classmate's PCB: DHT11 on GPIO13, RGB LED on 32/33/25, fan PWM on 19 through a MOSFET, and no
 // tachometer or heater (pin -1: the firmware leaves them alone; RPM is estimated from the power).
 type Board = 'kit' | 'pcb'
+type NodeKind = 'thermal' | 'camera'
 const PCB_PINS: Record<string, number> = {
   DHTPIN: 13, LED_R_PIN: 32, LED_G_PIN: 33, LED_B_PIN: 25, BUZZER_PIN: 26,
   FAN_PWM_PIN: 19, FAN_TACH_PIN: -1, HEATER_PIN: -1, MQ135_PIN: 34, MQ7_PIN: 35,
@@ -81,6 +82,7 @@ function withBoard(code: string, board: Board) {
     .replace(/^#define (\w+_PIN|DHTPIN)(\s+)-?\d+(\s+\/\/\s*)D\d+/gm, (m, key: string, sp: string, c: string) =>
       key in PCB_PINS ? `#define ${key}${sp}${PCB_PINS[key]}${c}${PCB_PINS[key] < 0 ? 'no existe en la PCB:' : `GPIO${PCB_PINS[key]}`}` : m)
     .replace(/const bool\s+TACOMETRO_SIMULADO(\s+)= false;/, 'const bool  TACOMETRO_SIMULADO$1= true;  // la PCB no tiene tacometro: RPM estimadas')
+    .replace('#define PCB_WITH_INA219 0', '#define PCB_WITH_INA219 1')
 }
 
 // Escapes a value for a C string literal in the sketch.
@@ -92,6 +94,7 @@ const cString = (s: string) => s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
  */
 export function NodeSetup({ roomId }: { roomId: string }) {
   const [template, setTemplate] = useState<string | null | undefined>(undefined)
+  const [nodeKind, setNodeKind] = useState<NodeKind>('thermal')
   const [ssid, setSsid] = useState('')
   const [wifiPass, setWifiPass] = useState('')
   const [mqttPass, setMqttPass] = useState('')
@@ -101,9 +104,9 @@ export function NodeSetup({ roomId }: { roomId: string }) {
 
   useEffect(() => {
     setTemplate(undefined)
-    api.get<string>('/admin/node-firmware', { params: { room: roomId }, responseType: 'text', transformResponse: r => r })
+    api.get<string>('/admin/node-firmware', { params: { room: roomId, kind: nodeKind }, responseType: 'text', transformResponse: r => r })
       .then(r => setTemplate(r.data)).catch(() => setTemplate(null))
-  }, [roomId])
+  }, [roomId, nodeKind])
 
   if (template === undefined) return <p className="text-sm text-slate-400">Preparando el programa del nodo…</p>
   if (template === null) return <p className="text-sm text-slate-400">Este servidor no tiene un broker público para nodos (falta NODE_MQTT_HOST en su configuración).</p>
@@ -114,11 +117,11 @@ export function NodeSetup({ roomId }: { roomId: string }) {
     .replace('__WIFI_SSID__', () => cString(ssid.trim()))
     .replace('__WIFI_PASS__', () => cString(wifiPass))
     .replace('__MQTT_PASS__', () => cString(mqttPass))
-  const code = withBoard(base, board)
+  const code = nodeKind === 'thermal' ? withBoard(base, board) : base
 
   function download() {
     const url = URL.createObjectURL(new Blob([code], { type: 'text/plain' }))
-    const a = Object.assign(document.createElement('a'), { href: url, download: 'nodo.ino' })
+    const a = Object.assign(document.createElement('a'), { href: url, download: nodeKind === 'camera' ? 'camara.ino' : 'nodo.ino' })
     a.click()
     URL.revokeObjectURL(url)
   }
@@ -128,6 +131,18 @@ export function NodeSetup({ roomId }: { roomId: string }) {
   return (
     <div className="flex flex-col gap-3 text-sm text-slate-300">
       <div className="flex flex-wrap items-center gap-3">
+        <span className="text-xs text-slate-400">Tipo</span>
+        <div className="segmented flex p-0.5" role="radiogroup" aria-label="Tipo de nodo">
+          {([['thermal', 'Nodo térmico'], ['camera', 'ESP32-CAM']] as const).map(([v, label]) => (
+            <button key={v} type="button" role="radio" aria-checked={nodeKind === v} onClick={() => setNodeKind(v)}
+              className={`segmented-item px-3 py-1 text-xs ${nodeKind === v ? 'segmented-item-active' : ''}`}>{label}</button>
+          ))}
+        </div>
+        <span className="text-xs text-slate-500">
+          {nodeKind === 'camera' ? 'Captura y publica el conteo visual en ccs/<aula>/occupancy.' : 'Mide ambiente y controla los actuadores.'}
+        </span>
+      </div>
+      {nodeKind === 'thermal' && <div className="flex flex-wrap items-center gap-3">
         <span className="text-xs text-slate-400">Placa</span>
         <div className="segmented flex p-0.5" role="radiogroup" aria-label="Placa del nodo">
           {([['kit', 'Protoboard'], ['pcb', 'PCB']] as const).map(([v, label]) => (
@@ -137,10 +152,10 @@ export function NodeSetup({ roomId }: { roomId: string }) {
         </div>
         <span className="text-xs text-slate-500">
           {board === 'pcb'
-            ? 'DHT11 en GPIO13, LED en 32/33/25, ventilador en 19; sin tacómetro.'
+            ? 'DHT11 en GPIO13, LED en 32/33/25, ventilador en 19 e INA219 en SDA 4 / SCL 15; sin tacómetro.'
             : 'DHT22 en D4 y los pines del armado en protoboard.'}
         </span>
-      </div>
+      </div>}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <label className="block"><span className="field-label">Red WiFi (2.4 GHz)</span>
           <input className="field" value={ssid} onChange={e => setSsid(e.target.value)} placeholder="nombre de la red" autoComplete="off" /></label>
@@ -155,9 +170,15 @@ export function NodeSetup({ roomId }: { roomId: string }) {
         <span className="text-xs text-slate-500">Las claves solo se escriben en el archivo; no se envían.</span>
       </span>
       <ol className="list-decimal space-y-1 pl-5 marker:text-slate-500">
-        <li>Ábrelo en el <b className={b}>Arduino IDE</b>, placa <b className={b}>ESP32 Dev Module</b>. Librerías: DHT sensor library y PubSubClient.</li>
-        <li>Con los 12 V y OUT+ desconectados, conecta el USB y pulsa <b className={b}>Subir</b> (<b className={b}>BOOT</b> si se queda en "Connecting…").</li>
-        <li>Quita el USB, pon OUT+ en el riel y enchufa los 12 V.</li>
+        {nodeKind === 'camera' ? <>
+          <li>Ábrelo en el <b className={b}>Arduino IDE</b>, placa <b className={b}>AI Thinker ESP32-CAM</b>. Instala `esp32-camera`, `PubSubClient` y enlaza el adaptador del modelo ESP-WHO/TFLite.</li>
+          <li>Conecta el programador MB/USB-TTL, mantén <b className={b}>GPIO0</b> a GND durante la carga y retíralo al reiniciar.</li>
+          <li>El backend acepta el conteo cuando llega con confianza ≥ 0,50; sin modelo enlazado conserva la estimación por CO₂.</li>
+        </> : <>
+          <li>Ábrelo en el <b className={b}>Arduino IDE</b>, placa <b className={b}>ESP32 Dev Module</b>. Librerías: DHT sensor library, PubSubClient{board === 'pcb' ? ' y Adafruit INA219' : ''}.</li>
+          <li>Con los 12 V y OUT+ desconectados, conecta el USB y pulsa <b className={b}>Subir</b> (<b className={b}>BOOT</b> si se queda en "Connecting…").</li>
+          <li>Quita el USB, pon OUT+ en el riel y enchufa los 12 V.</li>
+        </>}
       </ol>
     </div>
   )
@@ -181,7 +202,8 @@ export function NodeLinkStatus({ link, roomId, stored }: { link: NodeLink; roomI
       {reading ? (
         <p className="text-slate-300">
           Última lectura {timeAgo(reading.timestamp, now)}: {fmt(reading.temperature)} °C, {fmt(reading.humidity, 0)} % de humedad
-          {reading.co2_ppm != null && <>, {fmt(reading.co2_ppm, 0)} ppm de CO₂</>}.
+          {reading.co2_ppm != null && <>, {fmt(reading.co2_ppm, 0)} ppm de CO₂</>}
+          {reading.camera_occupancy != null && <>, {reading.camera_occupancy} personas por cámara</>}.
         </p>
       ) : (
         <p className="text-xs text-slate-500">

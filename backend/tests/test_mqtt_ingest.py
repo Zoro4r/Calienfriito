@@ -1,7 +1,7 @@
 """Translation of ESP32 MQTT telemetry into SensorReading (app.services.mqtt_ingest)."""
 import json
 
-from app.services.mqtt_ingest import telemetry_to_reading
+from app.services.mqtt_ingest import telemetry_to_reading, OCCUPANCY_STATE, occupancy_update, latest_camera_occupancy
 
 TELEMETRY = {
     "ciclo": 42, "uptime_s": 44.0, "temp_c": 25.6, "humedad": 55, "co2_proxy": 3535,
@@ -60,6 +60,34 @@ def test_missing_optional_fields_use_defaults():
     assert r.co_ppm == 0.0
     assert r.is_simulated is False
     assert r.node_state == {}
+
+
+def test_ina_measurements_are_optional_and_do_not_replace_other_telemetry():
+    data = {**TELEMETRY, "ina_voltage_v": 12.1, "ina_current_ma": 185.0, "ina_power_mw": 2238.5}
+    reading = telemetry_to_reading("ccs/A403/telemetry", json.dumps(data))
+    assert (reading.ina_voltage_v, reading.ina_current_ma, reading.ina_power_mw) == (12.1, 185.0, 2238.5)
+    assert reading.node_state["accion"] == "COOLING"
+    without_ina = telemetry_to_reading("ccs/A403/telemetry", json.dumps(TELEMETRY))
+    assert without_ina.ina_power_mw is None
+    bad_ina = telemetry_to_reading("ccs/A403/telemetry", json.dumps({**data, "ina_power_mw": "nan"}))
+    assert bad_ina is not None and bad_ina.ina_power_mw is None
+
+
+def test_occupancy_message_is_cached_and_attached_to_next_telemetry():
+    OCCUPANCY_STATE.clear()
+    entry = occupancy_update("ccs/A403/occupancy", '{"people_count": 8, "confidence": 0.91}')
+    assert entry["people_count"] == 8
+    assert latest_camera_occupancy("A403", now=entry["received_at"]) == 8
+    r = telemetry_to_reading("ccs/A403/telemetry", json.dumps(TELEMETRY))
+    assert r.camera_occupancy == 8
+
+
+def test_invalid_occupancy_is_ignored():
+    OCCUPANCY_STATE.clear()
+    assert occupancy_update("ccs/A403/occupancy", '{"people_count": -1}') is None
+    assert occupancy_update("ccs/A403/occupancy", '{"people_count": 8, "confidence": 1.5}') is None
+    assert occupancy_update("ccs/A403/occupancy", '{"people_count": 8, "confidence": 0.4}') is None
+    assert latest_camera_occupancy("A403") is None
 
 
 # ── Node connectivity (RF-10) ────────────────────────────────────────────────

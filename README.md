@@ -1,171 +1,142 @@
-# Climate Cognitive System (CCS) · Aula A403
+# Climate Cognitive System (CCS)
 
-Proyecto **CS5055 Internet of Things — UTEC 2026-2**. Integra las dos mitades del sistema:
+Sistema IoT para observar aulas, registrar variables ambientales y comparar el control local del nodo ESP32 con un controlador cognitivo que corre en el backend.
 
-- **El nodo IoT:** un ESP32 con DHT22, MQ-135 y MQ-7, simulado en Wokwi. Decide en el propio nodo si
-  enfriar, calentar o esperar, con una alarma de CO local, y mueve ventilador, calefactor, buzzer y LED RGB.
-- **La plataforma cognitiva:** backend FastAPI con PostgreSQL y MongoDB, modelo de ML, dashboard React,
-  reservas, reportes de ahorro y chat.
+## Estado real de la entrega
 
-Los une **MQTT**: el nodo publica su telemetría y el backend la recibe, la guarda y corre su modelo de IA
-**en paralelo** (modo sombra), para comparar sus decisiones con las del nodo.
+La implementación actual tiene dos modos:
 
-```
- ESP32 en Wokwi ──MQTT 1883──► Mosquitto ──► backend FastAPI ──► MongoDB / PostgreSQL ──► dashboard React
- (decide y actúa)                  │          (ingesta MQTT +                               localhost:3000
-                                   │           IA en sombra)
-                                   └──WebSocket 9001──► monitor del nodo (localhost:3000/monitor/)
-```
-
-| Monitor del nodo: Fallout | Metal | Anime |
+| Modo | Servicios | Transporte del nodo |
 |---|---|---|
-| ![Fallout](docs/screenshots/dashboard-fallout.png) | ![Metal](docs/screenshots/dashboard-metal.png) | ![Anime](docs/screenshots/dashboard-anime.png) |
+| Desarrollo / demostración | Docker Compose: PostgreSQL, MongoDB, Mosquitto, FastAPI y React | MQTT local en 1883; monitor MQTT/WebSocket en 9001 |
+| Producción GCP | Los mismos servicios en una VM, Nginx en 80/443 y Mosquitto público en 8883 | MQTT sobre TLS, usuario y contraseña |
 
----
+Producción se compone con docker-compose.yml, infra/docker-compose.prod.yml e infra/docker-compose.gcp.yml. Ver [infra/gcp/README.md](infra/gcp/README.md).
 
-## Qué hay en el repositorio
+El firmware ejecutable directamente en Wokwi es una simulación de A403: usa host.wokwi.internal:1883, sensores simulados y is_simulated: true. En “Conectar nodo”, el dashboard genera un programa térmico desde backend/app/firmware/nodo.ino.tmpl o un programa de transporte para ESP32-CAM desde backend/app/firmware/camara.ino.tmpl, con aula, Wi-Fi y broker configurados. La cámara publica su conteo en `ccs/<aula>/occupancy`; el modelo ESP-WHO/TFLite debe enlazarse en el adaptador `detectPeople()` antes de usarla en producción.
 
-```
-ccs/
-├── README.md · LICENSE · docker-compose.yml
-├── backend/              API FastAPI (ingesta HTTP y MQTT, modelo de IA, reportes)
-├── frontend/             dashboard React; el monitor del nodo está en public/monitor/
-├── hardware/
-│   ├── firmware/         firmware del ESP32 y circuito de Wokwi
-│   └── gateway/          puerta de enlace anterior (Arduino UNO) y conteo con cámara
-├── infra/
-│   ├── mqtt/             configuración de Mosquitto
-│   ├── database/         scripts de inicio de PostgreSQL y MongoDB
-│   └── docker-compose.prod.yml   ajustes para el servidor de producción
-├── ml/
-│   ├── pipeline/         entrenamiento del modelo de carga térmica
-│   └── seed-data/        datos semilla: aulas (incluida A403), sensores, horarios y lecturas
-├── tools/
-│   ├── broker-local/     broker MQTT liviano para probar solo el nodo, sin Docker
-│   ├── openapi/          generador de la especificación para Watson Assistant
-│   └── vscode/           workspace de VS Code (plataforma + firmware)
-└── docs/
-    ├── project/          perfil, proyecto redefinido, estados y escenarios, presupuesto, diagrama, enunciado
-    ├── platform/         documentación técnica del backend y el frontend
-    ├── report/           informe en LaTeX (plantilla ACM)
-    └── screenshots/      capturas del monitor del nodo
-```
+## Qué hace el sistema
 
-| Para… | Ver |
-|---|---|
-| Entender el nodo, sus estados y el formato MQTT | [`hardware/firmware/README.md`](hardware/firmware/README.md) |
-| La ingesta MQTT del backend | [`backend/app/services/mqtt_ingest.py`](backend/app/services/mqtt_ingest.py) |
-| El alcance y el plan del proyecto | [`docs/project/PROYECTO_REDEFINIDO_CS5055.md`](docs/project/PROYECTO_REDEFINIDO_CS5055.md) |
-| Los escenarios de prueba con su log esperado | [`docs/project/ESTADOS_Y_ESCENARIOS_CS5055.md`](docs/project/ESTADOS_Y_ESCENARIOS_CS5055.md) |
-| La plataforma en detalle (arquitectura, API, ML) | [`docs/platform/PLATAFORMA.md`](docs/platform/PLATAFORMA.md) y [`TECHNICAL_DOCUMENTATION.md`](docs/platform/TECHNICAL_DOCUMENTATION.md) |
+- El ESP32 lee DHT22, MQ-135 y MQ-7, aplica reglas locales con histéresis y controla ventilador, calefactor reservado, buzzer y LED RGB.
+- La alarma de CO se evalúa localmente y tiene prioridad sobre órdenes remotas.
+- El nodo publica telemetría y estado por MQTT; el backend registra la decisión local como node_state.
+- Una ESP32-CAM puede publicar `{"people_count": 8, "confidence": 0.91}` en `ccs/<aula>/occupancy`. El backend conserva el último conteo durante 120 s y lo anexa a la siguiente telemetría térmica como `camera_occupancy`.
+- FastAPI almacena lecturas en MongoDB y la configuración operativa en PostgreSQL.
+- El backend calcula `cognitive_action` con el modelo disponible o con heurística de respaldo. La ocupación visual reemplaza por defecto el proxy de CO₂; `OCCUPANCY_FUSION_MODE=blend` permite ponderar ambas señales y, si la cámara falta o expira, se usa CO₂.
+- Chronos-Bolt pronostica a 30 minutos cada 5 minutos, inicialmente en sombra. En modo learning, el backend puede enviar órdenes temporales; si falla la comunicación, expiran y el nodo vuelve a sus reglas.
+- React ofrece resumen, aulas, detalle, historial, control manual, aprendizaje, infraestructura, usuarios y rentabilidad. El monitor está en /monitor/.
+
+    sensores -> reglas locales del ESP32 -> actuadores
+         \-> MQTT -> FastAPI -> MongoDB/PostgreSQL
+    ESP32-CAM -> MQTT occupancy -> FastAPI -> camera_occupancy -> predictor
+                             \-> heurística / Chronos en sombra
+                             \-> orden temporal MQTT (modo learning)
+
+## Componentes del repositorio
+
+    backend/             API FastAPI, ingesta MQTT, servicios, ML y firmware físico generado
+    frontend/            dashboard React/Vite y monitor MQTT en public/monitor/
+    hardware/firmware/   firmware Wokwi y circuito de demostración
+    hardware/gateway/    gateway HTTP heredado; no es el camino principal actual
+    infra/               Compose, Mosquitto local, overlays de producción y GCP
+    ml/                  datos semilla, entrenamiento y simulaciones
+    ml_pipeline/         artefactos de datos/features
+    tools/broker-local/  broker MQTT/WebSocket sin Docker
+    docs/project/        alcance, escenarios, presupuesto y diagramas actuales
+    informe-compañero/   informe P2 y evidencias del prototipo
+    docs/report/         informe anterior en PDF
 
 ## Requisitos
 
-- **[Docker Desktop](https://www.docker.com/products/docker-desktop/)** (Docker ≥ 24 y Compose ≥ 2), **abierto**.
-- **VS Code** con las extensiones **Wokwi Simulator** (licencia gratuita *Community*) y **PlatformIO IDE**.
-- **Python 3.12** para cargar los datos semilla.
-- **Node.js 18+**, solo si vas a usar el broker liviano sin Docker.
+- Docker Desktop y Docker Compose.
+- Python 3.12 para datos semilla o herramientas auxiliares.
+- VS Code con PlatformIO y Wokwi para la simulación.
+- Node.js 18+ solo para tools/broker-local.
 
-## Paso a paso
+## Desarrollo local
 
-### 1. Configurar y levantar la plataforma
-
-```bash
-cp .env.example .env
-docker compose up --build -d
-docker compose ps          # mosquitto, postgres, mongo, backend y frontend en "running"
-```
+    cp .env.example .env
+    docker compose up --build -d
+    docker compose ps
 
 | Servicio | Dirección |
 |---|---|
-| Dashboard React | http://localhost:3000 (usuario `admin`, contraseña `admin` en desarrollo) |
-| Monitor del nodo | http://localhost:3000/monitor/ |
-| API y documentación | http://localhost:8000/docs |
-| MQTT | `localhost:1883` (TCP) y `localhost:9001` (WebSocket) |
+| Dashboard | http://localhost:3000 |
+| Monitor MQTT/WebSocket | http://localhost:3000/monitor/ |
+| API y OpenAPI | http://localhost:8000/docs |
+| Health check | http://localhost:8000/health |
+| MQTT | localhost:1883 |
+| MQTT sobre WebSocket | localhost:9001 |
 
-### 2. Cargar los datos semilla (la primera vez)
+PostgreSQL y MongoDB se publican solo en loopback (127.0.0.1). El Mosquitto local acepta conexiones anónimas porque está pensado para desarrollo y Wokwi.
 
-Crea el aula **A403** y su sensor **`s-A403`**, que es el que usa el nodo. Sin este paso las lecturas del nodo
-igual se guardan, pero el dashboard React no muestra el aula.
+Para cargar datos semilla:
 
-```bash
-python3.12 -m venv .venv && source .venv/bin/activate
-pip install -r backend/requirements.txt
-python ml/seed-data/generate_dataset.py
-```
+    python -m venv .venv
+    # PowerShell: .\.venv\Scripts\Activate.ps1
+    # Linux/macOS: source .venv/bin/activate
+    pip install -r backend/requirements.txt
+    python ml/seed-data/generate_dataset.py
 
-Más detalles en [`ml/seed-data/DATASET_GUIDE.md`](ml/seed-data/DATASET_GUIDE.md).
+Abre hardware/firmware o tools/vscode/ccs.code-workspace, compila con PlatformIO y ejecuta hardware/firmware/diagram.json en Wokwi. El nodo publica ccs/A403/telemetry. Los potenciómetros del circuito son proxies de MQ-135/MQ-7, no una calibración química real.
 
-### 3. Compilar y simular el nodo
+## Producción en GCP
 
-1. En VS Code abre el workspace **`tools/vscode/ccs.code-workspace`** (File → Open Workspace from File).
-   Incluye `hardware/firmware` como carpeta propia, que es lo que necesitan PlatformIO y Wokwi.
-2. Compila el firmware con el **✓ (Build)** de PlatformIO (o `pio run` dentro de `hardware/firmware`).
-3. Abre `hardware/firmware/diagram.json` y pulsa **▶** (o `Cmd/Ctrl + Shift + P` → *Wokwi: Start Simulator*).
+La VM documentada es ccs-iot-vm; el dominio es https://calienfriito-utec.duckdns.org.
 
-En la Wokwi Terminal deberías ver:
+    cd /opt/ccs
+    git pull
+    docker compose up -d --build
 
-```
-[     2.8 s] RED  MQTT conectado a host.wokwi.internal:1883 | cliente calienfriito-A403-sim-...
-[     2.8 s] RED  Publica en ccs/A403/telemetry | suscrito a ccs/A403/command
-```
+La VM debe tener COMPOSE_FILE apuntando a los tres Compose, certificados de Let's Encrypt y infra/gcp/passwd fuera del control de versiones. Nunca pongas contraseñas, claves JWT, Watson o MQTT en git.
 
-### 4. Ver el nodo en vivo
+- Nginx sirve el frontend por HTTPS y redirige HTTP.
+- Mosquitto expone 8883 con TLS para nodos externos; 1883 queda ligado a loopback para el backend.
+- El backend habla con Mosquitto por la red Docker en 1883.
+- El firmware físico generado verifica el certificado raíz y usa el usuario MQTT configurado.
 
-> ⚠️ **Wokwi pausa la simulación cuando VS Code no está a la vista.** Si el navegador tapa VS Code, el nodo
-> se congela, deja de publicar y aparece *offline*.
+## MQTT y datos
 
-Abre el monitor **dentro de VS Code**, al lado del simulador:
-`Cmd/Ctrl + Shift + P` → **Simple Browser: Show** → `http://localhost:3000/monitor/`, y arrastra esa pestaña a la derecha.
-
-### 5. Comprobar que el backend recibe la telemetría
-
-```bash
-docker compose logs -f backend | grep INGEST
-# [INGEST] sensor_id=s-A403 is_simulated=True co_ppm=4.0 ts=...
-
-curl "http://localhost:8000/api/v1/sensors/?sensor_id=s-A403&limit=1"
-```
-
-Cada lectura guardada trae **las dos decisiones**:
-
-- `node_state`: lo que decidió y ejecutó el **nodo** (`accion`, `motivo`, actuadores, bloqueo por histéresis).
-- `cognitive_action`: lo que decidió el **backend** con el modelo de IA o su heurística, en modo sombra.
-
-Esa comparación es la base de la figura de resultados del proyecto ([`docs/project/PROYECTO_REDEFINIDO_CS5055.md`](docs/project/PROYECTO_REDEFINIDO_CS5055.md), §1).
-
-## Probar solo el nodo, sin Docker
-
-Para trabajar en el firmware o en el monitor sin levantar toda la plataforma:
-
-```bash
-cd tools/broker-local
-npm install      # la primera vez
-npm start        # MQTT 1883 + WebSocket 9001 + monitor en http://localhost:9001
-```
-
-No lo levantes a la vez que Docker: usan los mismos puertos.
-
-## Cómo se conectan las piezas
-
-| Pieza | Detalle |
-|---|---|
-| Tópicos | `ccs/A403/telemetry`, `status` (Last Will, visible en el dashboard en ≤ 10 s), `config` (umbrales) y `command` (control manual del ventilador desde el dashboard) |
-| Ingesta | El backend se suscribe a `ccs/+/telemetry`, traduce cada mensaje a `SensorReading` (`sensor_id = s-<aula>`) y lo procesa igual que `POST /api/v1/sensors/` |
-| CO₂ | El nodo envía `co2_ppm` (conversión simulada del MQ-135, 400–2000 ppm); el backend estima la ocupación como (CO₂ − 420) / 25 |
-| Lecturas simuladas | El nodo marca `is_simulated: true`; el backend las separa de las del hardware real |
-| Sin DHT | Si el DHT22 no lee, el nodo sigue controlando, pero esa lectura no se guarda (el backend exige temperatura y humedad) |
-| Variables | `MQTT_ENABLED`, `MQTT_TOPIC` en `.env` (ver `.env.example`) |
-
-## Solución de problemas
-
-| Síntoma | Causa | Solución |
+| Tópico | Dirección | Uso |
 |---|---|---|
-| Wokwi: `Error de conexion MQTT (rc=-2)` | Mosquitto no está corriendo | `docker compose up -d` (o el broker liviano) |
-| Monitor: **Nodo: offline (LWT)** | Wokwi se pausó porque VS Code no estaba visible | Monitor en Simple Browser al lado del simulador |
-| El aula A403 no aparece en el dashboard React | Faltan los datos semilla | Paso 2 |
-| Backend: `MQTT broker mosquitto:1883 unavailable` | Mosquitto no arrancó | `docker compose logs mosquitto` |
-| `docker compose` no responde | Docker Desktop cerrado | Abre Docker Desktop |
+| ccs/<aula>/telemetry | nodo → backend/monitor | Lecturas, decisión local, actuadores y diagnóstico |
+| ccs/<aula>/occupancy | ESP32-CAM → backend | `people_count`, `confidence`, `ts`; se asocia a la siguiente telemetría térmica |
+| ccs/<aula>/status | nodo → monitor | online y offline mediante Last Will |
+| ccs/<aula>/config | nodo → monitor | Umbrales retenidos |
+| ccs/<aula>/command | backend → nodo | Control manual u orden temporal de learning |
+
+La ingesta MQTT guarda temperatura, humedad, gases, node_state, cognitive_action e is_simulated. Traduce la telemetría a la misma ruta lógica que una lectura HTTP.
+
+La cámara y el nodo térmico son dispositivos independientes: comparten aula y broker, pero no deben compartir el mismo `sensor_id` térmico. Un conteo con confianza menor a 0,50 no se acepta como observación visual.
+
+## Límites que deben quedar explícitos
+
+- El calefactor existe en software, pero el montaje físico validado se concentra en el ventilador.
+- MQ-135 es un proxy de CO₂/ocupación; su conversión lineal no es una medición NDIR calibrada.
+- La integración de ESP32-CAM, el tópico MQTT y la fusión del backend están implementados. El repositorio todavía no contiene un modelo de detección entrenado/exportado para enlazar en `detectPeople()`; hasta entonces la cámara no produce un conteo válido y el predictor conserva el fallback por CO₂.
+- Chronos-Bolt está integrado para pronóstico/comparación; no gobierna siempre el nodo. Solo learning envía órdenes temporales.
+- TLS corresponde al overlay GCP y al firmware físico generado; Wokwi/local usa MQTT sin TLS en 1883.
+- hardware/gateway y los diagramas del informe anterior son antecedentes, no la ruta principal de docker compose.
+
+## Verificación rápida
+
+    docker compose ps
+    docker compose logs -f backend
+    curl http://localhost:8000/health
+    curl "http://localhost:8000/api/v1/sensors/?sensor_id=s-A403&limit=1"
+    pip install -r backend/requirements-dev.txt
+    pytest backend/tests
+
+Para probar solo MQTT: cd tools/broker-local, npm install, npm start. No lo ejecutes junto con el Mosquitto de Docker: comparten 1883 y 9001.
+
+## Documentación relacionada
+
+- [Revisión de correspondencia entre informes y código](docs/project/REVISION_ESTADO_DOCUMENTAL.md)
+- [Diagramas arquitecturales actuales](docs/project/DIAGRAMAS_ARQUITECTURA_ACTUAL.md)
+- [Alcance físico actual](docs/project/ALCANCE_DOS_AGRUPACIONES.md)
+- [Estados y escenarios](docs/project/ESTADOS_Y_ESCENARIOS_CS5055.md)
+- [Firmware Wokwi](hardware/firmware/README.md)
+- [Despliegue GCP](infra/gcp/README.md)
 
 ---
 

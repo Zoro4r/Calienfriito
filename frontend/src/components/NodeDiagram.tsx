@@ -2,7 +2,7 @@ import type { ReactNode } from 'react'
 import { Cpu } from 'lucide-react'
 import type { StoredReading } from '../types'
 import { occupiedAt } from './NodeLive'
-import { parseUtc } from './ui'
+import { fmt, parseUtc } from './ui'
 
 // The ESP32 node of a room drawn as its parts: sensors on the left, the board in the
 // middle, actuators on the right. Parts and pins are the standard kit wired by the
@@ -80,6 +80,7 @@ export default function NodeDiagram({ reading, active, header }: {
   const age = reading ? (Date.now() - parseUtc(reading.timestamp).getTime()) / 60_000 : null
   // A node that is not sending data (or is switched off here) is off: no old values.
   const off = !active || age == null || age > STALE_MIN
+  const ina = !off && reading && (reading.ina_voltage_v != null || reading.ina_current_ma != null || reading.ina_power_mw != null) ? reading : null
   const live = parts(reading)
   const asOff = (ps: Part[]) => ps.map(p => ({ ...p, health: 'unknown' as Health, state: 'Apagado' }))
   const sensors = off ? asOff(live.sensors) : live.sensors
@@ -91,7 +92,7 @@ export default function NodeDiagram({ reading, active, header }: {
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
         {header}
         <span className="ml-auto text-xs text-slate-500">
-          {all.length + 1} componentes{faults ? ` · ${faults} con falla` : ''}
+          {all.length + 1 + (ina ? 1 : 0)} componentes{faults ? ` · ${faults} con falla` : ''}
         </span>
       </div>
       <div className="grid grid-cols-1 items-center gap-3 lg:my-auto lg:grid-cols-[minmax(0,1fr)_3rem_14rem_3rem_minmax(0,1fr)] lg:gap-0">
@@ -116,6 +117,13 @@ export default function NodeDiagram({ reading, active, header }: {
           {actuators.map(p => <PartCard key={p.name} p={p} side="right" />)}
         </div>
       </div>
+      {ina && <div className="surface-inset flex flex-wrap items-center gap-x-6 gap-y-2 rounded-xl px-4 py-3 text-sm text-slate-300">
+        <span className="font-semibold text-white">Consumo medido · INA219</span>
+        <span>Voltaje <b className="font-semibold text-white">{fmt(ina.ina_voltage_v, 2)} V</b></span>
+        <span>Corriente <b className="font-semibold text-white">{fmt(ina.ina_current_ma, 1)} mA</b></span>
+        <span>Potencia <b className="font-semibold text-white">{fmt(ina.ina_power_mw, 1)} mW</b></span>
+        <span className="text-xs text-slate-500">Descarga las muestras y la energía acumulada en Historial.</span>
+      </div>}
     </div>
   )
 }

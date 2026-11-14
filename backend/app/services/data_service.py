@@ -90,6 +90,7 @@ def get_room_context(db_sql, sensor_id: str, reading_timestamp: datetime) -> dic
         "room_name": room.name,
         "max_capacity": room.max_capacity,
         "target_temp": room.target_temp,
+        "volume_m3": room.area_m2 * room.ceiling_height_m if room.area_m2 is not None and room.ceiling_height_m is not None else None,
         "expected_people": expected_people,
         "expected_source": expected_source,
         "control_policy": getattr(room, "control_policy", "auto") or "auto",
@@ -223,7 +224,8 @@ async def process_reading(db, reading: SensorReading, db_sql=None) -> dict:
 
     if cognitive_action is None:
         cognitive_action = await calculate_cooling_demand(
-            reading.temperature, room_context, reading.timestamp, co2_ppm=reading.co2_ppm
+            reading.temperature, room_context, reading.timestamp,
+            co2_ppm=reading.co2_ppm, camera_occupancy=reading.camera_occupancy,
         )
 
     learning_action = None

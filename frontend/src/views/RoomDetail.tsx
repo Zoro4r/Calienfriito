@@ -361,6 +361,15 @@ export default function RoomDetail({ roomId, embeddedTab }: { roomId?: string; e
                   band={latest ? { text: getStatusLabel(levelCO2(latest.co2_ppm ?? 0)), tone: LEVEL_TONE[levelCO2(latest.co2_ppm ?? 0)] } : null} /></div>}
           </div>
 
+          {live && latest && (latest.ina_voltage_v != null || latest.ina_current_ma != null || latest.ina_power_mw != null) &&
+            <div className="surface-inset flex shrink-0 flex-wrap items-center gap-x-6 gap-y-2 rounded-xl px-4 py-3 text-sm text-slate-300">
+              <span className="font-semibold text-white">Consumo medido · INA219</span>
+              <span>Voltaje <b className="font-semibold text-white">{fmt(latest.ina_voltage_v, 2)} V</b></span>
+              <span>Corriente <b className="font-semibold text-white">{fmt(latest.ina_current_ma, 1)} mA</b></span>
+              <span>Potencia <b className="font-semibold text-white">{fmt(latest.ina_power_mw, 1)} mW</b></span>
+              <span className="text-xs text-slate-500">Descarga el registro del día en Historial.</span>
+            </div>}
+
           {/* Row 2 · history: window + one chart per magnitude. Not in Aulas: Mediciones already charts the last hour. */}
           {!embedded && <>
           <div className="flex shrink-0 flex-wrap items-center justify-between gap-2">

@@ -4,8 +4,9 @@ Predictive service — dual-mode thermal load engine.
 Occupancy model (feed-forward + feedback):
   - expected_occupancy → PLANNED headcount from Schedule/Reservation. Feed-forward
     signal: drives anticipatory pre-cooling, the only value known before arrival.
-  - actual_occupancy   → REALIZED headcount inferred from CO2 (occupancy_service).
-    Feedback signal: trims the demand once the room actually fills (or doesn't).
+  - actual_occupancy   → REALIZED headcount from the ESP32-CAM when available,
+    otherwise inferred from CO2 (occupancy_service). Feedback signal: trims the
+    demand once the room actually fills (or doesn't).
   The engine blends both into an effective_occupancy via FEEDBACK_WEIGHT.
 
 Operates in two modes:
@@ -30,6 +31,8 @@ import numpy as np
 
 from app.core.timeutils import to_local
 from app.services.occupancy_service import estimate_actual_occupancy, occupancy_gap
+from app.services.occupancy_service import fuse_occupancy
+from app.config import OCCUPANCY_FUSION_MODE, OCCUPANCY_VISUAL_WEIGHT
 from app.services.climate_service import outdoor_temp as _outdoor_temp
 from app.services.room_profile import get_metadata as _room_metadata
 
@@ -114,6 +117,7 @@ async def calculate_cooling_demand(
     room_context: dict,
     reading_timestamp: datetime,
     co2_ppm: float | None = None,
+    camera_occupancy: int | None = None,
 ) -> dict:
     """Compute the cognitive AC action for an incoming sensor reading.
 
@@ -124,8 +128,8 @@ async def calculate_cooling_demand(
                       registered room or control is disabled.
         reading_timestamp: UTC datetime of the reading; used to extract hour_of_day
                            as a feature for the ML model.
-        co2_ppm: Measured CO2 in ppm, used to infer actual (realized) occupancy for
-                 the feedback correction. None → feed-forward on expected only.
+        co2_ppm: Measured CO2 in ppm, used as an occupancy proxy.
+        camera_occupancy: Optional direct count from the ESP32-CAM/gateway.
 
     Returns:
         Dict with keys: ac_status ('ON' | 'STANDBY'), cooling_mode, target,
@@ -142,8 +146,13 @@ async def calculate_cooling_demand(
     if not room_context or target_temp is None:
         return {"ac_status": "STANDBY", "cooling_mode": None, "target": target_temp, "model": "none"}
 
-    # Feedback signal: infer realized occupancy from CO2 (None when no CO2 channel).
-    actual_people = estimate_actual_occupancy(co2_ppm, max_capacity)
+    # Direct visual count replaces or blends with the delayed CO2 proxy according
+    # to OCCUPANCY_FUSION_MODE. The chosen value is the model's actual occupancy.
+    actual_people = fuse_occupancy(
+        co2_ppm, camera_occupancy, max_capacity,
+        mode=OCCUPANCY_FUSION_MODE if OCCUPANCY_FUSION_MODE in {"co2", "visual", "blend"} else "visual",
+        visual_weight=OCCUPANCY_VISUAL_WEIGHT,
+    )
 
     # Effective occupancy = feed-forward (plan) blended with feedback (measured).
     # No CO2 signal → pure feed-forward on the reservation/schedule expectation.
@@ -176,6 +185,7 @@ async def calculate_cooling_demand(
         actual_feature = actual_people if actual_people is not None else expected_people
         # Physical room metadata (Tier 3) — floor, volume_m3, ac_btu.
         meta = _room_metadata(room_context.get("room_id"))
+        volume_m3 = room_context.get("volume_m3") or meta["volume_m3"]
         # Build the row in the exact order the bundle was trained on (_features).
         feat_values = {
             "temperature": current_temp,
@@ -187,7 +197,7 @@ async def calculate_cooling_demand(
             "room_code": _room_map.get(str(room_context.get("room_id")), -1),  # legacy bundles
             "outdoor_temp": _outdoor_temp(ts),   # exogenous climate driver (Tier 2)
             "floor": meta["floor"],
-            "volume_m3": meta["volume_m3"],
+            "volume_m3": volume_m3,
             "ac_btu": meta["ac_btu"],
         }
         try:

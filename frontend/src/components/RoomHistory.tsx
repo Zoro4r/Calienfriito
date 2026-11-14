@@ -18,6 +18,7 @@ interface Summary {
   class_hours: number; pct_out_of_band: number | null; out_of_band_hours: number
   fan_hours: number; heater_hours: number; fan_kwh: number; heater_kwh: number
   manual_orders: number; co_alarms: number; readings: number
+  ina_energy_wh?: number | null
 }
 interface History {
   date: string | null; start?: string; end?: string; data_start?: string; data_end?: string
@@ -141,16 +142,17 @@ export default function RoomHistory({ roomId }: { roomId: string }) {
         <DayNav date={data.date} start={data.start} end={data.end} dataStart={data.data_start} dataEnd={data.data_end} onChange={setDay} />
         <span className="hidden flex-1 text-xs text-slate-500 md:block">Pasa el cursor: todos los gráficos marcan la misma hora.</span>
         <button className="btn btn-secondary text-xs" onClick={downloadCsv} disabled={downloading || !s?.readings}>
-          {downloading ? <RefreshCw size={13} className="animate-spin" /> : <Download size={13} />} CSV del día
+          {downloading ? <RefreshCw size={13} className="animate-spin" /> : <Download size={13} />} CSV del día · incluye INA219
         </button>
       </div>
 
       {/* The day in two numbers */}
-      <section className="surface grid shrink-0 grid-cols-1 gap-4 rounded-xl px-5 py-3 sm:grid-cols-2">
+      <section className={`surface grid shrink-0 grid-cols-1 gap-4 rounded-xl px-5 py-3 ${s?.ina_energy_wh != null ? 'sm:grid-cols-3' : 'sm:grid-cols-2'}`}>
         <Stat label="Clase fuera del rango ideal"
           value={s && s.class_hours > 0 && s.pct_out_of_band != null ? `${fmt(s.pct_out_of_band, 1)} %` : '—'}
           detail={s && s.class_hours > 0 ? `${duration(s.out_of_band_hours)} de ${duration(s.class_hours)} de clase` : 'Sin clases este día'} />
         <Stat label="Ventilador encendido" value={s ? duration(s.fan_hours) : '—'} detail={s ? `${fmt(s.fan_kwh, s.fan_kwh < 1 ? 2 : 1)} kWh` : ''} />
+        {s?.ina_energy_wh != null && <Stat label="Energía medida · INA219" value={`${fmt(s.ina_energy_wh, 3)} Wh`} detail="Integrada de lecturas válidas; sin completar huecos." />}
       </section>
 
       {/* Four magnitudes on one time axis, then what the actuators did */}

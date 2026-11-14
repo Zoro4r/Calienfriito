@@ -7,9 +7,10 @@ The system distinguishes two occupancy signals that must never be conflated:
     Schedule / Reservation. Drives FEED-FORWARD (anticipatory) pre-cooling: it is
     the only signal available *before* people arrive.
 
-  - actual_occupancy    → REALIZED headcount, inferred in real time from the CO2
-    sensor. Drives FEEDBACK (closed-loop) correction: if a room booked for 40 has
-    only 5 people, CO2 stays low and the AC backs off, avoiding wasted energy.
+  - actual_occupancy    → REALIZED headcount, preferably from a visual counter and
+    otherwise inferred in real time from the CO2 sensor. Drives FEEDBACK
+    (closed-loop) correction: if a room booked for 40 has only 5 people, the AC
+    backs off, avoiding wasted energy.
 
 Actual occupancy is estimated with a simple steady-state CO2 mass-balance proxy:
 
@@ -19,12 +20,41 @@ Both constants are calibratable. Defaults assume a naturally/lightly ventilated
 classroom; recalibrate against a couple of manual headcounts for accuracy.
 """
 
+from typing import Literal
+
 # Outdoor / empty-room CO2 floor in ppm (no occupants present).
 CO2_BASELINE_PPM = 420.0
 
 # Steady-state CO2 rise in ppm attributable to one additional occupant.
 # Higher ventilation → lower value. Calibrate per room type.
 CO2_PPM_PER_PERSON = 25.0
+
+
+def fuse_occupancy(
+    co2_ppm: float | None,
+    visual_count: int | None,
+    max_capacity: int | None = None,
+    mode: Literal["co2", "visual", "blend"] = "visual",
+    visual_weight: float = 0.7,
+) -> int | None:
+    """Return the occupancy signal used by the predictor.
+
+    A visual count is a direct observation, while CO2 is a delayed proxy. In
+    ``visual`` mode it replaces the proxy; ``blend`` is intended for calibration.
+    Missing visual data always falls back to the CO2 estimate.
+    """
+    co2_count = estimate_actual_occupancy(co2_ppm, max_capacity)
+    if visual_count is None:
+        return co2_count
+    visual = max(0, int(visual_count))
+    if max_capacity is not None:
+        visual = min(visual, int(max_capacity))
+    if mode == "co2":
+        return co2_count
+    if mode == "blend" and co2_count is not None:
+        weight = min(1.0, max(0.0, float(visual_weight)))
+        return round((1.0 - weight) * co2_count + weight * visual)
+    return visual
 
 
 def estimate_actual_occupancy(

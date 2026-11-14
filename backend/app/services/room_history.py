@@ -24,11 +24,35 @@ GAP_EVENT_S = 300.0                 # a silence this long is reported as "sin da
 FMT = "%Y-%m-%dT%H:%M:%S"
 
 PROJECTION = {
-    "_id": 0, "timestamp": 1, "temperature": 1, "humidity": 1, "co2_ppm": 1, "co_ppm": 1,
+    "_id": 0, "sensor_id": 1, "timestamp": 1, "temperature": 1, "humidity": 1, "co2_ppm": 1, "co_ppm": 1,
+    "ina_voltage_v": 1, "ina_current_ma": 1, "ina_power_mw": 1,
     "node_state.accion": 1, "node_state.ventilador_pwm": 1, "node_state.calefactor": 1,
     "node_state.co2_proxy": 1, "node_state.alarma_co": 1, "node_state.manual": 1,
     "node_state.motivo": 1,
 }
+
+
+def ina_energy_series(docs: list[dict]) -> list[float | None]:
+    """Cumulative measured Wh for sorted readings; never fill missing or >60 s gaps."""
+    energy_wh = 0.0
+    previous: dict[str, tuple[datetime, float]] = {}
+    values: list[float | None] = []
+    for doc in docs:
+        power_mw = doc.get("ina_power_mw")
+        sensor_id = doc.get("sensor_id", "")
+        if power_mw is None:
+            previous.pop(sensor_id, None)
+            values.append(None)
+            continue
+        ts = datetime.fromisoformat(doc["timestamp"])
+        prior = previous.get(sensor_id)
+        if prior:
+            gap_s = (ts - prior[0]).total_seconds()
+            if 0 < gap_s <= MAX_GAP_S:
+                energy_wh += (prior[1] + power_mw) * gap_s / 7_200_000
+        previous[sensor_id] = (ts, power_mw)
+        values.append(round(energy_wh, 6))
+    return values
 
 
 def day_bounds(day: date) -> tuple[datetime, datetime]:

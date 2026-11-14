@@ -6,6 +6,7 @@ from app.services.occupancy_service import (
     CO2_PPM_PER_PERSON,
     estimate_actual_occupancy,
     occupancy_gap,
+    fuse_occupancy,
 )
 
 
@@ -54,3 +55,17 @@ class TestOccupancyGap:
 
     def test_zero_gap(self):
         assert occupancy_gap(12, 12) == 0
+
+
+class TestFuseOccupancy:
+    def test_visual_replaces_co2_proxy(self):
+        co2 = CO2_BASELINE_PPM + 30 * CO2_PPM_PER_PERSON
+        assert fuse_occupancy(co2, 8, max_capacity=40, mode="visual") == 8
+
+    def test_visual_falls_back_to_co2_when_missing(self):
+        co2 = CO2_BASELINE_PPM + 6 * CO2_PPM_PER_PERSON
+        assert fuse_occupancy(co2, None, max_capacity=40, mode="visual") == 6
+
+    def test_blend_is_calibratable(self):
+        co2 = CO2_BASELINE_PPM + 10 * CO2_PPM_PER_PERSON
+        assert fuse_occupancy(co2, 4, mode="blend", visual_weight=0.5) == 7

@@ -9,6 +9,9 @@ export interface Room {
   control_policy?: string
   building?: string | null
   floor?: number | null
+  area_m2?: number | null
+  ceiling_height_m?: number | null
+  volume_m3?: number | null
 }
 
 export const buildingLabel = (b?: string | null) => (b ? `Edificio ${b}` : 'Sin edificio')

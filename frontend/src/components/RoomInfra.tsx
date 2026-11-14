@@ -81,7 +81,7 @@ export default function RoomInfra({ room, notify, onRenamed, onDeleted }: {
     <header className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b border-slate-800 px-5 py-4">
       <div className="min-w-0">
         <h2 className="text-xl font-semibold text-white">{room.id} <span className="text-sm font-normal text-slate-400">{shortName(room)}</span></h2>
-        <p className="mt-0.5 text-sm text-slate-400">{locationLabel(room)} · {room.max_capacity} personas · objetivo {room.target_temp} °C</p>
+        <p className="mt-0.5 text-sm text-slate-400">{locationLabel(room)} · {room.max_capacity} personas · objetivo {room.target_temp} °C{room.volume_m3 != null ? ` · ${room.volume_m3} m³` : ''}</p>
       </div>
       <div className="ml-auto flex items-center gap-2">
         <Link to={`/room/${room.id}`} className="btn btn-ghost">Ver aula <ArrowRight size={14} /></Link>

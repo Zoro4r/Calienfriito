@@ -8,7 +8,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import PlainTextResponse
 from motor.motor_asyncio import AsyncIOMotorDatabase
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
 from starlette.concurrency import run_in_threadpool
@@ -36,7 +36,18 @@ class ScheduleIn(BaseModel):
     expected_people: int
 
 
-class RoomIn(BaseModel):
+class RoomDimensionsIn(BaseModel):
+    area_m2: Optional[float] = Field(None, gt=0, le=10000, allow_inf_nan=False)
+    ceiling_height_m: Optional[float] = Field(None, gt=0, le=20, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def dimensions_together(self):
+        if (self.area_m2 is None) != (self.ceiling_height_m is None):
+            raise ValueError("La superficie y la altura deben indicarse juntas.")
+        return self
+
+
+class RoomIn(RoomDimensionsIn):
     id: str
     name: str
     max_capacity: int
@@ -46,7 +57,7 @@ class RoomIn(BaseModel):
     schedules: List[ScheduleIn] = []
 
 
-class RoomCreateIn(BaseModel):
+class RoomCreateIn(RoomDimensionsIn):
     id: str
     name: str
     max_capacity: int
@@ -67,7 +78,7 @@ class SensorCreateIn(BaseModel):
     room_id: str
 
 
-class RoomUpdateIn(BaseModel):
+class RoomUpdateIn(RoomDimensionsIn):
     new_id: Optional[str] = None   # if set and differs from path param, renames the PK
     name: str
     max_capacity: int
@@ -123,12 +134,17 @@ class RoomOut(BaseModel):
     control_policy: Optional[str] = None
     building: Optional[str] = None
     floor: Optional[int] = None
+    area_m2: Optional[float] = None
+    ceiling_height_m: Optional[float] = None
+    volume_m3: Optional[float] = None
 
 
 def _room_out(r: Room) -> dict:
     return {
         "id": r.id, "name": r.name, "max_capacity": r.max_capacity, "target_temp": r.target_temp,
         "control_policy": r.control_policy, "building": r.building, "floor": r.floor,
+        "area_m2": r.area_m2, "ceiling_height_m": r.ceiling_height_m,
+        "volume_m3": round(r.area_m2 * r.ceiling_height_m, 2) if r.area_m2 is not None and r.ceiling_height_m is not None else None,
     }
 
 
@@ -323,6 +339,8 @@ def create_room(
         target_temp=payload.target_temp,
         building=_clean_building(payload.building),
         floor=payload.floor,
+        area_m2=payload.area_m2,
+        ceiling_height_m=payload.ceiling_height_m,
     )
     db.add(room)
     try:
@@ -384,6 +402,7 @@ def update_room(
             new_room = Room(
                 id=new_id, name=payload.name, max_capacity=payload.max_capacity, target_temp=payload.target_temp,
                 control_policy=room.control_policy, building=_clean_building(payload.building), floor=payload.floor,
+                area_m2=payload.area_m2, ceiling_height_m=payload.ceiling_height_m,
             )
             db.add(new_room)
             db.flush()
@@ -409,6 +428,8 @@ def update_room(
         room.target_temp = payload.target_temp
         room.building = _clean_building(payload.building)
         room.floor = payload.floor
+        room.area_m2 = payload.area_m2
+        room.ceiling_height_m = payload.ceiling_height_m
         db.commit()
         db.refresh(room)
     except HTTPException:
@@ -554,6 +575,9 @@ def setup_room(
             room.target_temp = payload.target_temp
             room.building = _clean_building(payload.building) or room.building
             room.floor = payload.floor if payload.floor is not None else room.floor
+            if payload.area_m2 is not None:
+                room.area_m2 = payload.area_m2
+                room.ceiling_height_m = payload.ceiling_height_m
         else:
             room = Room(
                 id=payload.id,
@@ -562,6 +586,8 @@ def setup_room(
                 target_temp=payload.target_temp,
                 building=_clean_building(payload.building),
                 floor=payload.floor,
+                area_m2=payload.area_m2,
+                ceiling_height_m=payload.ceiling_height_m,
             )
             db.add(room)
             db.flush()
@@ -697,6 +723,7 @@ class NodeConfigOut(BaseModel):
 # The node firmware, as a template: the room and broker are filled in here, and the WiFi and
 # broker password in the browser (they never reach the server). Room codes become MQTT topics.
 NODE_FIRMWARE = Path(__file__).resolve().parent.parent / "firmware" / "nodo.ino.tmpl"
+CAMERA_FIRMWARE = Path(__file__).resolve().parent.parent / "firmware" / "camara.ino.tmpl"
 ROOM_CODE = re.compile(r"^[A-Za-z0-9_-]{1,20}$")
 
 
@@ -705,16 +732,26 @@ ROOM_CODE = re.compile(r"^[A-Za-z0-9_-]{1,20}$")
     response_class=PlainTextResponse,
     responses={401: {"model": ErrorDetail}, 403: {"model": ErrorDetail}, 409: {"model": ErrorDetail}, 422: {"model": ErrorDetail}},
 )
-def node_firmware(room: str = Query(..., description="Room code, used as AULA on the node"), current_user: User = Depends(get_current_user)):
-    """nodo.ino for one room, with its code and this server's broker. WiFi and broker password stay as placeholders."""
+def node_firmware(
+    room: str = Query(..., description="Room code, used as AULA on the node"),
+    kind: str = Query("thermal", pattern="^(thermal|camera)$"),
+    current_user: User = Depends(get_current_user),
+):
+    """Firmware for one room. `kind=camera` downloads the ESP32-CAM occupancy publisher."""
     _require_admin(current_user)
     if not ROOM_CODE.match(room):
         raise HTTPException(status_code=422, detail="Room code must be 1-20 letters, digits, - or _.")
     if not NODE_MQTT_HOST:
         raise HTTPException(status_code=409, detail="This server has no public broker for nodes (NODE_MQTT_HOST).")
-    code = NODE_FIRMWARE.read_text(encoding="utf-8")
+    source = CAMERA_FIRMWARE if kind == "camera" else NODE_FIRMWARE
+    code = source.read_text(encoding="utf-8")
+    thermal_code = NODE_FIRMWARE.read_text(encoding="utf-8")
+    ca_start = thermal_code.find('R"PEM(')
+    ca_end = thermal_code.find(')PEM"', ca_start)
+    root_ca = thermal_code[ca_start + len('R"PEM('):ca_end] if ca_start >= 0 and ca_end > ca_start else ""
     for token, value in (("__AULA__", room), ("__MQTT_HOST__", NODE_MQTT_HOST),
-                         ("__MQTT_PORT__", str(NODE_MQTT_PORT)), ("__MQTT_USER__", NODE_MQTT_USER)):
+                         ("__MQTT_PORT__", str(NODE_MQTT_PORT)), ("__MQTT_USER__", NODE_MQTT_USER),
+                         ("__MQTT_ROOT_CA__", root_ca)):
         code = code.replace(token, value)
     return code
 

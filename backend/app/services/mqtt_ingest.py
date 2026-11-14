@@ -18,12 +18,14 @@ Payload fields used (see publicarTelemetria in the firmware):
 import asyncio
 import json
 import logging
+import math
+import time
 import uuid
 from datetime import datetime, timezone
 
 from pydantic import ValidationError
 
-from app.config import MQTT_ENABLED, MQTT_HOST, MQTT_PORT, MQTT_TOPIC
+from app.config import MQTT_ENABLED, MQTT_HOST, MQTT_PORT, MQTT_TOPIC, MQTT_OCCUPANCY_TOPIC
 from app.models.sensor import SensorReading
 
 logger = logging.getLogger(__name__)
@@ -41,7 +43,54 @@ NODE_STATE_FIELDS = (
 STATUS_TOPIC = "ccs/+/status"
 NODE_STATUS: dict[str, dict] = {}
 
+# Latest visual count per room. The next thermal telemetry message consumes this
+# value and persists it beside the environmental reading. A short TTL prevents a
+# disconnected camera from being presented as a live count indefinitely.
+OCCUPANCY_TTL_SECONDS = 120.0
+MIN_OCCUPANCY_CONFIDENCE = 0.50
+OCCUPANCY_STATE: dict[str, dict] = {}
+
 _task: asyncio.Task | None = None
+
+
+def occupancy_update(topic: str, payload: bytes | str) -> dict | None:
+    """Validate and cache one `ccs/<room>/occupancy` message."""
+    parts = topic.split("/")
+    if len(parts) != 3 or parts[2] != "occupancy" or not parts[1]:
+        return None
+    try:
+        data = json.loads(payload)
+    except (TypeError, ValueError):
+        logger.warning("MQTT: invalid occupancy JSON on %s", topic)
+        return None
+    if not isinstance(data, dict) or isinstance(data.get("people_count"), bool):
+        return None
+    try:
+        count = int(data["people_count"])
+        confidence = float(data.get("confidence", 1.0))
+    except (KeyError, TypeError, ValueError):
+        return None
+    if count < 0 or confidence < MIN_OCCUPANCY_CONFIDENCE or confidence > 1.0:
+        return None
+    entry = {
+        "room_id": parts[1],
+        "people_count": count,
+        "confidence": confidence,
+        "ts": data.get("ts"),
+        "received_at": time.monotonic(),
+    }
+    OCCUPANCY_STATE[parts[1]] = entry
+    return entry
+
+
+def latest_camera_occupancy(room_id: str, now: float | None = None) -> int | None:
+    entry = OCCUPANCY_STATE.get(room_id)
+    if entry is None:
+        return None
+    clock = time.monotonic() if now is None else now
+    if clock - entry["received_at"] > OCCUPANCY_TTL_SECONDS:
+        return None
+    return entry["people_count"]
 
 
 def status_update(topic: str, payload: bytes | str, retained: bool = False) -> dict | None:
@@ -81,7 +130,7 @@ async def publish_settings(room_id: str, payload: dict) -> None:
         await client.publish(f"ccs/{room_id}/settings", json.dumps(payload), qos=1, retain=True)
 
 
-def telemetry_to_reading(topic: str, payload: bytes | str) -> SensorReading | None:
+def telemetry_to_reading(topic: str, payload: bytes | str, camera_occupancy: int | None = None) -> SensorReading | None:
     """Translate one node telemetry message into a SensorReading.
 
     Returns None (and the message is skipped) when the topic is not
@@ -99,6 +148,16 @@ def telemetry_to_reading(topic: str, payload: bytes | str) -> SensorReading | No
     if not isinstance(data, dict):
         return None
 
+    def optional_ina(key: str) -> float | None:
+        value = data.get(key)
+        if value is None or isinstance(value, bool):
+            return None
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return None
+        return number if math.isfinite(number) else None
+
     try:
         return SensorReading(
             # Seed convention: one device per room, id "s-<room>" (e.g. s-A403).
@@ -107,6 +166,10 @@ def telemetry_to_reading(topic: str, payload: bytes | str) -> SensorReading | No
             humidity=float(data["humedad"]) if data.get("humedad") is not None else None,
             co2_ppm=data.get("co2_ppm"),
             co_ppm=float(data.get("co_ppm") or 0.0),
+            ina_voltage_v=optional_ina("ina_voltage_v"),
+            ina_current_ma=optional_ina("ina_current_ma"),
+            ina_power_mw=optional_ina("ina_power_mw"),
+            camera_occupancy=(camera_occupancy if camera_occupancy is not None else latest_camera_occupancy(parts[1])),
             is_simulated=bool(data.get("is_simulated", False)),
             node_state={k: data[k] for k in NODE_STATE_FIELDS if k in data},
         )
@@ -138,9 +201,10 @@ async def _run() -> None:
         try:
             async with aiomqtt.Client(MQTT_HOST, MQTT_PORT, identifier=client_id) as client:
                 await client.subscribe(MQTT_TOPIC)
+                await client.subscribe(MQTT_OCCUPANCY_TOPIC)
                 await client.subscribe(STATUS_TOPIC)
-                logger.info("MQTT ingest connected to %s:%d, subscribed to %s and %s",
-                            MQTT_HOST, MQTT_PORT, MQTT_TOPIC, STATUS_TOPIC)
+                logger.info("MQTT ingest connected to %s:%d, subscribed to %s, %s and %s",
+                            MQTT_HOST, MQTT_PORT, MQTT_TOPIC, MQTT_OCCUPANCY_TOPIC, STATUS_TOPIC)
                 async for message in client.messages:
                     try:
                         topic = str(message.topic)
@@ -148,6 +212,12 @@ async def _run() -> None:
                             entry = status_update(topic, message.payload, retained=bool(message.retain))
                             if entry:
                                 logger.info("[NODE] %s %s", entry["room_id"], "online" if entry["online"] else "offline")
+                            continue
+                        if topic.endswith("/occupancy"):
+                            entry = occupancy_update(topic, message.payload)
+                            if entry:
+                                logger.info("[OCCUPANCY] %s=%d confidence=%.2f",
+                                            entry["room_id"], entry["people_count"], entry["confidence"])
                             continue
                         await _ingest(topic, message.payload)
                     except Exception:  # one bad message must not stop the subscriber

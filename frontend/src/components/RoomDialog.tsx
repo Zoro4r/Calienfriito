@@ -10,8 +10,8 @@ import { Dialog } from './ui'
 // A new room only asks for its name, which is also its code (the AULA of the ESP32); capacity
 // and target temperature start with defaults, and building and floor can be set later when editing.
 
-interface RoomForm { id: string; name: string; building: string; floor: string; max_capacity: string; target_temp: string }
-const EMPTY_ROOM: RoomForm = { id: '', name: '', building: '', floor: '', max_capacity: '30', target_temp: '24' }
+interface RoomForm { id: string; name: string; building: string; floor: string; max_capacity: string; target_temp: string; area_m2: string; ceiling_height_m: string }
+const EMPTY_ROOM: RoomForm = { id: '', name: '', building: '', floor: '', max_capacity: '30', target_temp: '24', area_m2: '', ceiling_height_m: '' }
 type Impact = { reservations_count: number; sensors_count: number }
 
 export function friendly(err: unknown, fallback: string) {
@@ -26,6 +26,8 @@ export function useRoomForm(original: Room | null) {
   const [f, setF] = useState<RoomForm>(() => original ? {
     id: original.id, name: original.name, building: original.building ?? '', floor: original.floor == null ? '' : String(original.floor),
     max_capacity: String(original.max_capacity), target_temp: String(original.target_temp),
+    area_m2: original.area_m2 == null ? '' : String(original.area_m2),
+    ceiling_height_m: original.ceiling_height_m == null ? '' : String(original.ceiling_height_m),
   } : EMPTY_ROOM)
   // Rename: how many records move with the room. New room: history left by a deleted room with this code.
   const [moving, setMoving] = useState<Impact | null>(null)
@@ -63,6 +65,9 @@ export function useRoomForm(original: Room | null) {
   }
   if (!(Number(f.max_capacity) > 0)) problems.push('La capacidad debe ser mayor que 0.')
   const t = Number(f.target_temp)
+  if ((f.area_m2 === '') !== (f.ceiling_height_m === '')) problems.push('Indica superficie y altura juntas.')
+  if (f.area_m2 !== '' && !(Number(f.area_m2) > 0 && Number(f.area_m2) <= 10000)) problems.push('La superficie debe estar entre 0 y 10 000 m².')
+  if (f.ceiling_height_m !== '' && !(Number(f.ceiling_height_m) > 0 && Number(f.ceiling_height_m) <= 20)) problems.push('La altura debe estar entre 0 y 20 m.')
   if (!(t >= 16 && t <= 30)) problems.push('La temperatura objetivo debe estar entre 16 y 30 °C.')
   if (orphans && !inheritOk) problems.push('Confirma que la nueva aula heredará el historial existente.')
 
@@ -72,6 +77,8 @@ export function useRoomForm(original: Room | null) {
     target_temp: Number(f.target_temp),
     building: f.building.trim() || null,
     floor: f.floor === '' ? null : Number(f.floor),
+    area_m2: f.area_m2 === '' ? null : Number(f.area_m2),
+    ceiling_height_m: f.ceiling_height_m === '' ? null : Number(f.ceiling_height_m),
   }
 
   return { f, setF, code, renaming, moving, orphans, inheritOk, setInheritOk, problems, body, original }
@@ -91,6 +98,12 @@ export function RoomFields({ form, onSubmit }: { form: FormState; onSubmit: () =
     <form onSubmit={e => { e.preventDefault(); onSubmit() }}>
       {field('name', 'Nombre', { placeholder: 'ej. B201', maxLength: 20, autoFocus: true })}
       <span className="mt-1 block text-xs text-slate-500">Es también el código del aula: el que pondrás como AULA en el ESP32.</span>
+      <div className="mt-3 grid grid-cols-2 gap-3">
+        {field('area_m2', 'Superficie (m²)', { type: 'number', min: 0.01, max: 10000, step: 'any', placeholder: 'ej. 60' })}
+        {field('ceiling_height_m', 'Altura (m)', { type: 'number', min: 0.01, max: 20, step: 'any', placeholder: 'ej. 3' })}
+      </div>
+      {f.area_m2 !== '' && f.ceiling_height_m !== '' && Number(f.area_m2) > 0 && Number(f.ceiling_height_m) > 0 &&
+        <p className="mt-1 text-xs text-slate-400">Volumen para el modelo: {(Number(f.area_m2) * Number(f.ceiling_height_m)).toLocaleString('es-PE', { maximumFractionDigits: 2 })} m³</p>}
       <button type="submit" className="hidden" />
     </form>
   )
@@ -101,10 +114,14 @@ export function RoomFields({ form, onSubmit }: { form: FormState; onSubmit: () =
       {field('building', 'Edificio', { placeholder: 'ej. M', maxLength: 10 })}
       {field('floor', 'Piso', { type: 'number', placeholder: 'ej. 6', min: -5, max: 99 })}
       {field('max_capacity', 'Capacidad (personas)', { type: 'number', min: 1 })}
+      {field('area_m2', 'Superficie (m²)', { type: 'number', min: 0.01, max: 10000, step: 'any' })}
+      {field('ceiling_height_m', 'Altura (m)', { type: 'number', min: 0.01, max: 20, step: 'any' })}
       {field('target_temp', 'Temperatura objetivo (°C)', { type: 'number', min: 16, max: 30, step: 0.5 })}
       <button type="submit" className="hidden" />
     </form>
     <p className="mt-2 text-xs text-slate-500">
+      {f.area_m2 !== '' && f.ceiling_height_m !== '' && Number(f.area_m2) > 0 && Number(f.ceiling_height_m) > 0 &&
+        <>Volumen para el modelo: {(Number(f.area_m2) * Number(f.ceiling_height_m)).toLocaleString('es-PE', { maximumFractionDigits: 2 })} m³. </>}
       La IA decide con la temperatura objetivo. El nodo trabaja con 24 °C; usa el mismo valor para que la comparación Nodo vs IA sea justa.
     </p>
   </>

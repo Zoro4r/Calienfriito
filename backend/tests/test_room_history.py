@@ -61,3 +61,14 @@ def test_class_time_follows_the_timetable_when_given():
     out = summarize_day(docs, 180, 2000, timetable)
     assert out["summary"]["class_hours"] > 0 and out["summary"]["pct_out_of_band"] == 100.0
     assert out["classes"][0]["people"] == 12
+def test_ina_energy_series_skips_missing_and_long_gaps():
+    from app.services.room_history import ina_energy_series
+
+    docs = [
+        {"sensor_id": "s-A403", "timestamp": "2026-11-14T12:00:00.000000", "ina_power_mw": 2000},
+        {"sensor_id": "s-A403", "timestamp": "2026-11-14T12:00:10.000000", "ina_power_mw": 2000},
+        {"sensor_id": "s-A403", "timestamp": "2026-11-14T12:00:11.000000", "ina_power_mw": None},
+        {"sensor_id": "s-A403", "timestamp": "2026-11-14T12:00:12.000000", "ina_power_mw": 2000},
+        {"sensor_id": "s-A403", "timestamp": "2026-11-14T12:02:00.000000", "ina_power_mw": 2000},
+    ]
+    assert ina_energy_series(docs) == [0.0, 0.005556, None, 0.005556, 0.005556]

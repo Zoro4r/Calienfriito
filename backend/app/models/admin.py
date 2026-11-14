@@ -31,6 +31,8 @@ class Room(Base):
     name = Column(String, unique=True, nullable=False)
     max_capacity = Column(Integer, nullable=False)
     target_temp = Column(Float, nullable=False)
+    area_m2 = Column(Float, nullable=True)
+    ceiling_height_m = Column(Float, nullable=True)
     control_policy = Column(String, nullable=False, default="auto", server_default="auto")
     # Location, used to group and filter rooms in the UI (building → floor → room).
     building = Column(String, nullable=True, index=True)

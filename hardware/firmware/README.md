@@ -11,6 +11,20 @@ Lee DHT22, MQ-135 y MQ-7, decide **en el propio nodo** qué hacer con el ventila
 | [`wokwi.toml`](wokwi.toml) | Firmware a simular y puerto serial RFC2217 (4000) |
 | [`platformio.ini`](platformio.ini) | Placa `esp32dev`, framework Arduino y librerías |
 
+## ESP32-CAM de ocupación
+
+El dashboard también descarga `camara.ino` desde `backend/app/firmware/camara.ino.tmpl`.
+Ese programa captura frames en una AI-Thinker ESP32-CAM y publica:
+
+```json
+{"people_count": 8, "confidence": 0.91, "ts": 123456}
+```
+
+en `ccs/<aula>/occupancy`. El transporte MQTT y la captura están preparados, pero el
+adaptador `detectPeople()` debe enlazarse con el modelo ESP-WHO/TFLite exportado para
+la placa. Mientras no se enlace, no se publica un conteo válido y el backend sigue
+usando el proxy de CO₂.
+
 > El hardware real también usa DHT22: con un DHT11 (±2 °C, resolución 1 °C) la banda de ±0.5 °C
 > no se puede distinguir. Sí hay que reemplazar las conversiones simuladas del
 > MQ-135 (`CO2_PPM_MIN/MAX`) y del MQ-7 por sus curvas de calibración.

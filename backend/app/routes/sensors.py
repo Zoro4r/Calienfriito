@@ -71,6 +71,9 @@ class SensorReadingOut(BaseModel):
     humidity: Optional[float] = None
     co2_ppm: Optional[float] = None
     co_ppm: float = 0.0
+    ina_voltage_v: Optional[float] = None
+    ina_current_ma: Optional[float] = None
+    ina_power_mw: Optional[float] = None
     camera_occupancy: Optional[int] = None
     is_simulated: bool = False
     timestamp: str
@@ -371,7 +374,7 @@ async def room_history(
     `format=csv` downloads every reading of that day."""
     from datetime import date as date_cls
     from fastapi.responses import Response
-    from app.services.room_history import FMT, OFFSET, PROJECTION, day_bounds, equipment_for, summarize_day
+    from app.services.room_history import FMT, OFFSET, PROJECTION, day_bounds, equipment_for, summarize_day, ina_energy_series
 
     sensors = await run_in_threadpool(
         lambda: [d.id for d in db_sql.query(SensorDevice).filter(SensorDevice.room_id == room_id).all()]
@@ -395,22 +398,30 @@ async def room_history(
     from app.services.strategy_series import class_intervals, room_timetable
     timetable = class_intervals(*(await run_in_threadpool(room_timetable, db_sql, room_id)), start, end)
     in_class = lambda iso: any(s_ <= datetime.fromisoformat(iso[:19]) < e_ for s_, e_, _ in timetable)  # noqa: E731
+    ina_wh = ina_energy_series(docs)
 
     if format == "csv":
-        lines = ["timestamp_utc,temperature,humidity,co2_ppm,co_ppm,accion,ventilador_pct,calefactor,ocupada,alarma_co,manual,motivo"]
-        for d in docs:
+        lines = ["timestamp_utc,temperature,humidity,co2_ppm,co_ppm,accion,ventilador_pct,calefactor,ocupada,alarma_co,manual,motivo,ina_voltage_v,ina_current_ma,ina_power_mw,ina_energy_wh_accumulated,sensor_id"]
+        for d, accumulated_wh in zip(docs, ina_wh):
             ns = d.get("node_state") or {}
             motivo = (ns.get("motivo") or "").replace('"', "'")
+            power_mw = d.get("ina_power_mw")
             lines.append(",".join(str(v) for v in [
                 d["timestamp"][:19], "" if d.get("temperature") is None else d["temperature"], "" if d.get("humidity") is None else d["humidity"], d.get("co2_ppm") or "", d.get("co_ppm") or "",
                 ns.get("accion", ""), round((ns.get("ventilador_pwm") or 0) * 100 / 255), int(bool(ns.get("calefactor"))),
                 int(in_class(d["timestamp"])), int(bool(ns.get("alarma_co"))), int(bool(ns.get("manual"))), f'"{motivo}"',
+                "" if d.get("ina_voltage_v") is None else d["ina_voltage_v"],
+                "" if d.get("ina_current_ma") is None else d["ina_current_ma"],
+                "" if power_mw is None else power_mw,
+                "" if accumulated_wh is None else accumulated_wh,
+                d.get("sensor_id", ""),
             ]))
         return Response("\n".join(lines) + "\n", media_type="text/csv",
                         headers={"Content-Disposition": f'attachment; filename="historial_{room_id}_{anchor.isoformat()}.csv"'})
 
     equipment = equipment_for(meta, start, end)
     result = summarize_day(docs, equipment["fan_max_w"], equipment["heater_w"], timetable)
+    result["summary"]["ina_energy_wh"] = next((value for value in reversed(ina_wh) if value is not None), None)
     if meta and meta.get("start") and meta["start"] < end and meta["end"] >= start:
         # Simulated days know how many people came: same class intervals as "Aprendizaje".
         from app.services.strategy_series import _intervals

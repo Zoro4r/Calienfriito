@@ -116,6 +116,8 @@ def _run_migrations(engine, text):
         # rooms: location (building → floor), used to group rooms in the UI
         "ALTER TABLE rooms ADD COLUMN IF NOT EXISTS building VARCHAR",
         "ALTER TABLE rooms ADD COLUMN IF NOT EXISTS floor INTEGER",
+        "ALTER TABLE rooms ADD COLUMN IF NOT EXISTS area_m2 DOUBLE PRECISION",
+        "ALTER TABLE rooms ADD COLUMN IF NOT EXISTS ceiling_height_m DOUBLE PRECISION",
         "CREATE INDEX IF NOT EXISTS ix_rooms_building ON rooms (building)",
         # One-time backfill for rooms created before these columns existed, from the
         # UTEC code convention "<building><floor><nn>" (A403 → A, 4; M1001 → M, 10).

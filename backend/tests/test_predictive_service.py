@@ -88,6 +88,17 @@ async def test_feedback_blend_with_co2():
 
 
 @pytest.mark.asyncio
+async def test_visual_occupancy_replaces_co2_proxy_when_available():
+    co2 = CO2_BASELINE_PPM + 30 * CO2_PPM_PER_PERSON
+    result = await _demand(
+        current_temp=28.0, room_context=make_context(), reading_timestamp=TS,
+        co2_ppm=co2, camera_occupancy=8,
+    )
+    assert result["actual_occupancy"] == 8
+    assert result["effective_occupancy"] == round((1 - FEEDBACK_WEIGHT) * 20 + FEEDBACK_WEIGHT * 8, 2)
+
+
+@pytest.mark.asyncio
 async def test_target_adjusted_downward_by_thermal_load():
     result = await _demand(current_temp=28.0, room_context=make_context(), reading_timestamp=TS)
     assert result["target"] == round(20.0 - result["thermal_load_offset"], 2)
@@ -113,6 +124,24 @@ async def test_timezone_aware_timestamp_accepted():
 
 def test_active_engine_reports_heuristic_without_model():
     assert predictive_service.active_engine() == "heuristic"
+
+
+@pytest.mark.asyncio
+async def test_ml_uses_registered_room_volume(monkeypatch):
+    class Model:
+        seen = None
+
+        def predict(self, rows):
+            self.seen = rows.tolist()
+            return [0.5]
+
+    model = Model()
+    monkeypatch.setattr(predictive_service, "_model", model)
+    monkeypatch.setattr(predictive_service, "_features", ["volume_m3"])
+    monkeypatch.setattr(predictive_service, "_outdoor_temp", lambda ts: 25.0)
+    result = await _demand(current_temp=28.0, room_context=make_context(volume_m3=192), reading_timestamp=TS)
+    assert result["model"] == "ml"
+    assert model.seen == [[192.0]]
 
 
 def _dump_bundle(tmp_path, beats: bool):

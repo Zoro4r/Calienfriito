@@ -38,6 +38,13 @@ MQTT_ENABLED = os.getenv("MQTT_ENABLED", "false").lower() in ("1", "true", "yes"
 MQTT_HOST = os.getenv("MQTT_HOST", "localhost")
 MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
 MQTT_TOPIC = os.getenv("MQTT_TOPIC", "ccs/+/telemetry")
+MQTT_OCCUPANCY_TOPIC = os.getenv("MQTT_OCCUPANCY_TOPIC", "ccs/+/occupancy")
+
+# Occupancy fusion: visual count can replace the CO2 proxy, or be blended with it.
+# `visual` is the safe default once an ESP32-CAM is present because it is a direct
+# headcount; `blend` is useful while calibrating the camera against CO2.
+OCCUPANCY_FUSION_MODE = os.getenv("OCCUPANCY_FUSION_MODE", "visual").lower()
+OCCUPANCY_VISUAL_WEIGHT = float(os.getenv("OCCUPANCY_VISUAL_WEIGHT", "0.7"))
 
 # How a physical node reaches the broker from outside (shown in "Conectar nodo").
 # Empty host: the deployment has no public broker and the dialog says so.

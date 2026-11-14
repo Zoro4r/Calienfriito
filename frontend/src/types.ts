@@ -73,6 +73,10 @@ export interface StoredReading {
   humidity: number | null
   co2_ppm: number | null
   co_ppm: number | null
+  ina_voltage_v?: number | null
+  ina_current_ma?: number | null
+  ina_power_mw?: number | null
+  camera_occupancy?: number | null
   is_simulated?: boolean
   timestamp: string
   cognitive_action?: CognitiveAction | null

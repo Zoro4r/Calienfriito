@@ -1,5 +1,7 @@
 # Climate Cognitive System (CCS)
 
+> **Nota de alcance (inventario actual):** este plan y presupuesto describen la propuesta anterior. La distribución física vigente y sus límites están en [Alcance de dos agrupaciones](ALCANCE_DOS_AGRUPACIONES.md).
+
 ## Nodo IoT de control térmico de aula: modelo de IA frente a heurística
 
 ### Definición del proyecto redefinido, lista de compras y plan de ejecución — CS5055 Internet of Things 2026-2
@@ -369,7 +371,7 @@ El docente confirmó esta jerarquía: *"El ventilador DC de 12 V con relé o MOS
 | `ccs/A403/telemetry` | nodo → backend | `{temperature, humidity, co2_ppm, co_ppm, fan_current_a, is_simulated}` | 1 |
 | `ccs/A403/command` | backend → nodo | `{action, fan_level, source, reason}` | 1, retenido |
 | `ccs/A403/status` | nodo → backend | `{fan_state, heater_state, alarm_state, uptime, rssi, fw_version}` | 1 |
-| `ccs/A403/occupancy` | laptop → backend | `{people_count, ts}` (canal externo de la cámara) | 1 |
+| `ccs/A403/occupancy` | ESP32-CAM → backend | `{people_count, confidence, ts}` (canal visual independiente del nodo térmico) | 1 |
 | `ccs/A403/lwt` | Last Will | `{"online": false}` | 1, retenido |
 
 El campo `source` del comando indica qué lógica lo generó (`heuristic` o `model`), lo que permite registrar la trazabilidad de la comparación del §1.
@@ -384,7 +386,7 @@ El campo `source` del comando indica qué lógica lo generó (`heuristic` o `mod
 
 **Bróker:** Mosquitto como quinto servicio del `docker-compose` existente, junto a `postgres`, `mongo`, `backend` y `frontend`. Autenticación por usuario/contraseña y TLS si el tiempo lo permite.
 
-**Migración desde el gateway actual.** `hardware/gateway/sistema.py` no se elimina: pierde la responsabilidad de telemetría (que pasa al ESP32) y conserva la de visión por computadora, publicando el aforo a `ccs/A403/occupancy`. Separar ambos canales es lo correcto y además es lo que el docente pidió: el nodo ambiental deja de depender de una laptop encendida.
+**Migración desde el gateway actual.** `hardware/gateway/sistema.py` no se elimina: queda como gateway de validación con laptop y conserva la publicación del aforo al mismo contrato `ccs/A403/occupancy`. La ruta preferida de despliegue es ahora una ESP32-CAM independiente, que evita que el nodo ambiental dependa de una laptop encendida. El modelo de detección debe enlazarse y validarse en la placa antes de declarar la cámara operativa.
 
 **Planes de contingencia de red — el mayor riesgo operativo**
 

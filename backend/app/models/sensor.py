@@ -11,11 +11,14 @@ class SensorReading(BaseModel):
     humidity: Optional[float] = Field(None, description="Relative humidity percentage")
     co2_ppm: Optional[float] = Field(None, description="CO2 concentration in ppm")
     co_ppm: float = Field(0.0, description="Carbon monoxide concentration in ppm (MQ7 sensor)")
+    ina_voltage_v: Optional[float] = Field(None, allow_inf_nan=False, description="INA219 bus voltage in volts")
+    ina_current_ma: Optional[float] = Field(None, allow_inf_nan=False, description="INA219 fan current in milliamps")
+    ina_power_mw: Optional[float] = Field(None, allow_inf_nan=False, description="INA219 fan power in milliwatts")
     camera_occupancy: Optional[int] = Field(
         None,
         description=(
-            "Current headcount measured by the sensor node's camera (MediaPipe "
-            "line-crossing count). Persisted alongside the CO2-derived "
+            "Current headcount measured by the sensor node's camera (ESP32-CAM "
+            "detector or gateway line-crossing count). Persisted alongside the CO2-derived "
             "actual_occupancy to validate/calibrate the mass-balance proxy. "
             "Not a model feature; None when the node has no camera."
         ),

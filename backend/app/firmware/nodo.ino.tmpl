@@ -90,10 +90,14 @@
 #endif
 #define FAN_PWM_CHANNEL 0 // solo se usa con la API antigua
 
-// ------------------------- INA219 (opcional) -------------------------------
-// #include <Wire.h>
-// #include <Adafruit_INA219.h>
-// Adafruit_INA219 ina219;
+// El programa de la PCB habilita el INA219; la protoboard conserva GPIO4 para el DHT22.
+#define PCB_WITH_INA219 0
+#if PCB_WITH_INA219
+#include <Wire.h>
+#include <Adafruit_INA219.h>
+Adafruit_INA219 ina219;
+bool inaDisponible = false;
+#endif
 
 // ---------------------------- Pines -----------------------------------------
 #define DHTPIN       4    // D4
@@ -652,18 +656,47 @@ void publicarTelemetria(bool dhtOk, float tempC, float humedad, int mq135, int m
 
   float co2ppm = CO2_PPM_MIN + mq135 * (CO2_PPM_MAX - CO2_PPM_MIN) / 4095.0;
   medirRpmVentilador();
-  char buf[700]; // cabe en el buffer MQTT fijado con setBufferSize en setup()
-  snprintf(buf, sizeof(buf),
+  char inaJson[112] = "";
+#if PCB_WITH_INA219
+  // Comprobar presencia cada ciclo: si se desconecta, no publicar ceros como mediciones.
+  Wire.beginTransmission(0x40);
+  if (Wire.endTransmission() == 0) {
+    if (!inaDisponible) inaDisponible = ina219.begin();
+    if (inaDisponible) {
+      const float voltage = ina219.getBusVoltage_V();
+      const bool voltageOk = ina219.success();
+      const float current = ina219.getCurrent_mA();
+      const bool currentOk = ina219.success();
+      const float power = ina219.getPower_mW();
+      const bool powerOk = ina219.success();
+      if (voltageOk && currentOk && powerOk && isfinite(voltage) && isfinite(current) && isfinite(power)) {
+        snprintf(inaJson, sizeof(inaJson),
+          ",\"ina_voltage_v\":%.3f,\"ina_current_ma\":%.3f,\"ina_power_mw\":%.3f",
+          voltage, current, power);
+      } else {
+        inaDisponible = false;
+      }
+    }
+  } else {
+    inaDisponible = false;
+  }
+#endif
+  char buf[850]; // cabe en el buffer MQTT fijado con setBufferSize en setup()
+  const int n = snprintf(buf, sizeof(buf),
     "{\"ciclo\":%lu,\"uptime_s\":%.1f,\"temp_c\":%s,\"humedad\":%s,\"co2_proxy\":%d,\"co2_ppm\":%.0f,"
     "\"co_ppm\":%d,\"accion\":\"%s\",\"alarma_co\":%s,\"ventilador_pwm\":%d,\"ventilador_rpm\":%d,"
     "\"calefactor\":%s,\"buzzer\":%s,\"led\":\"%s\",\"motivo\":\"%s\","
-    "\"bloqueo_s\":%lu,\"pendiente\":\"%s\",\"manual\":%s,\"manual_restante_s\":%lu,\"is_simulated\":%s}",
+    "\"bloqueo_s\":%lu,\"pendiente\":\"%s\",\"manual\":%s,\"manual_restante_s\":%lu,\"is_simulated\":%s%s}",
     numeroCiclo, millis() / 1000.0, temp, hum, mq135, co2ppm, mq7ppm, nombreAccion(accionActual),
     alarmaCO ? "true" : "false", dutyVentilador, rpmVentilador,
     calefactorEncendido ? "true" : "false", buzzerEncendido ? "true" : "false",
     colorLed, motivo, bloqueoSegundos, bloqueoSegundos ? nombreAccion(accionPendiente) : "",
     manualActivo ? "true" : "false", manualActivo ? (manualHastaMs - millis() + 999) / 1000 : 0UL,
-    TELEMETRIA_SIMULADA ? "true" : "false");
+    TELEMETRIA_SIMULADA ? "true" : "false", inaJson);
+  if (n < 0 || n >= (int)sizeof(buf)) {
+    LOG("RED", "Telemetria demasiado larga; no se publica truncada");
+    return;
+  }
   if (!mqtt.publish(TOPIC_TELEMETRY, buf)) {
     LOG("RED", "No se pudo publicar la telemetria");
   }
@@ -769,9 +802,11 @@ void setup() {
   ledcAttachPin(FAN_PWM_PIN, FAN_PWM_CHANNEL);
 #endif
 
-  // --- INA219 (opcional) ---
-  // Wire.begin();
-  // if (!ina219.begin()) LOG("SIS", "INA219 no detectado (revisar SDA/SCL)");
+#if PCB_WITH_INA219
+  Wire.begin(4, 15); // SDA GPIO4, SCL GPIO15 en la PCB
+  inaDisponible = ina219.begin();
+  LOG("SIS", "INA219 %s (SDA=4, SCL=15)", inaDisponible ? "detectado" : "no detectado");
+#endif
 
   escribirBuzzer(false);
   aplicarAccion(accionActual);
@@ -793,7 +828,7 @@ void setup() {
   mqtt.setSocketTimeout(3);
   // El buffer por defecto de PubSubClient (256 B) no alcanza para la telemetria
   // con el motivo de la decision: los publish mas largos fallarian en silencio.
-  mqtt.setBufferSize(768);
+  mqtt.setBufferSize(1024);
   // RF-10: keepalive de 5 s. Si el nodo deja de responder, el broker publica el
   // Last Will ("offline") tras 1.5 x keepalive, unos 7.5 s (< 10 s exigidos).
   mqtt.setKeepAlive(5);
