@@ -171,12 +171,17 @@ async def real_room_usage(db, room_id: str, sensors: list[str], weekly, one_off,
         return None
     minutes = [{"ts": datetime.fromisoformat(r["_id"]), "temp": r.get("temp"), "lfan": r.get("lfan")} for r in rows]
     u = minute_usage(minutes, occupancy(weekly, one_off))
-    days = max((now - start_utc).total_seconds() / 86400, 1)
+    # The node's data span (it may have started after the window), at least one hour.
+    days = max((now - min(m["ts"] for m in minutes)).total_seconds() / 86400, 1 / 24)
     scale = MONTH_DAYS / days
     result = {
         "room_id": room_id, "copied_from": None, "source": "real", "days": round(days, 1),
         **{k: round(v * scale, 1) for k, v in u.items() if not k.startswith("day_")},
         **{k: [round(x / days, 4) for x in v] for k, v in u.items() if k.startswith("day_")},
     }
+    # "Always on" does not depend on the readings: the fan runs every building hour.
+    hours_per_day = (BUILDING_TO - BUILDING_FROM) * BUILDING_WEEKDAYS / 7
+    result["reference_hours"] = round(hours_per_day * MONTH_DAYS, 1)
+    result["day_reference"] = [round(BUILDING_WEEKDAYS / 7, 4) if BUILDING_FROM <= h < BUILDING_TO else 0.0 for h in range(24)]
     _REAL_CACHE[room_id] = (now, result)
     return result
