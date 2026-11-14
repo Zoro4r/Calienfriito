@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import { ChevronLeft, ChevronRight, Plus, Trash2 } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Trash2 } from 'lucide-react'
+import { Dialog } from './ui'
 import { useAuth } from '../context/AuthContext'
 import api, { getApiErrorDetail } from '../api/client'
 import { localDay, shiftDay } from './DayNav'
@@ -8,7 +9,8 @@ import { locationLabel, shortName, type Room } from '../utils/rooms'
 // One room's week: weekly classes and that week's reservations, Monday to Saturday, with
 // week navigation. Used by Horarios (with its room list) and by Aulas → Horarios.
 // Data: GET /admin/occupancy/week. Admins add weekly classes (day, hours, expected people)
-// with POST /admin/rooms/{id}/schedules and remove one by clicking it.
+// by dragging over a day (a dialog then asks for the expected people) and remove one by
+// clicking it: POST / DELETE /admin/rooms/{id}/schedules.
 
 interface Block { id?: number | null; room_id: string; day: number; start: string; end: string; kind: 'class' | 'reservation'; people: number; by: string | null }
 interface Week { week_start: string; blocks: Block[] }
@@ -39,9 +41,24 @@ export default function RoomWeek({ room }: { room: Room | undefined }) {
   const cap = room?.max_capacity ?? 0
   const [form, setForm] = useState<{ day: number; start: string; end: string; people: number } | null>(null)
   const [selected, setSelected] = useState<Shown & { day: number } | null>(null)
+  const [drag, setDrag] = useState<{ day: number; from: number; to: number } | null>(null)
   const [busy, setBusy] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
-  useEffect(() => { setForm(null); setSelected(null); setFormError(null) }, [room?.id])
+  useEffect(() => { setForm(null); setSelected(null); setFormError(null); setDrag(null) }, [room?.id])
+
+  // Dragging over a day column: minutes of the day under the pointer, snapped to 15 min.
+  const minuteAt = (e: React.PointerEvent<HTMLDivElement>) => {
+    const r = e.currentTarget.getBoundingClientRect()
+    const f = Math.min(1, Math.max(0, (e.clientY - r.top) / r.height))
+    return H0 * 60 + Math.round((f * (H1 - H0) * 60) / 15) * 15
+  }
+  function endDrag() {
+    if (!drag) return
+    let a = Math.min(drag.from, drag.to), b = Math.max(drag.from, drag.to)
+    if (b - a < 30) b = Math.min(H1 * 60, a + 60)          // a click or a short drag: one hour
+    setDrag(null); setFormError(null)
+    setForm({ day: drag.day, start: hm(a), end: hm(b), people: Math.min(25, cap || 25) })
+  }
 
   async function addClass() {
     if (!room || !form) return
@@ -109,43 +126,44 @@ export default function RoomWeek({ room }: { room: Room | undefined }) {
           <span className="w-48 text-center text-sm font-semibold text-white">{range}</span>
           <button className="btn btn-secondary px-2" aria-label="Semana siguiente" onClick={() => setAnchor(a => shiftDayBy(a, 7))}><ChevronRight size={16} /></button>
           <button className="btn btn-secondary" onClick={() => setAnchor(mondayOf(localDay(Date.now())))}>Esta semana</button>
-          {isAdmin && room && (
-            <button className="btn btn-primary" onClick={() => { setSelected(null); setFormError(null); setForm({ day: 0, start: '08:00', end: '10:00', people: Math.min(20, cap || 20) }) }}>
-              <Plus size={16} /> Agregar clase
-            </button>
-          )}
         </div>
       </header>
+      {isAdmin && room && <p className="shrink-0 border-b border-slate-800 px-4 py-2 text-xs text-slate-400">Arrastra sobre un día para agregar una clase. Haz clic en una clase para eliminarla.</p>}
       {form && (
-        <div className="flex shrink-0 flex-wrap items-end gap-3 border-b border-slate-800 px-4 py-3">
-          <label className="w-28"><span className="field-label">Día</span>
-            <select className="field" value={form.day} onChange={e => setForm({ ...form, day: Number(e.target.value) })}>
-              {['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'].map((n, i) => <option key={n} value={i}>{n}</option>)}
-            </select>
-          </label>
-          <label className="w-28"><span className="field-label">Inicio</span>
-            <input type="time" className="field" value={form.start} step={900} onChange={e => setForm({ ...form, start: e.target.value })} />
-          </label>
-          <label className="w-28"><span className="field-label">Fin</span>
-            <input type="time" className="field" value={form.end} step={900} onChange={e => setForm({ ...form, end: e.target.value })} />
-          </label>
-          <label className="w-32"><span className="field-label">Personas{cap ? ` (máx. ${cap})` : ''}</span>
-            <input type="number" className="field" min={1} max={cap || undefined} value={form.people}
-              onChange={e => setForm({ ...form, people: Number(e.target.value) })} />
-          </label>
-          <button className="btn btn-primary" disabled={busy || !form.start || !form.end || form.people < 1} onClick={addClass}>Guardar clase</button>
-          <button className="btn btn-secondary" disabled={busy} onClick={() => { setForm(null); setFormError(null) }}>Cancelar</button>
-          <p className="basis-full text-xs text-slate-400">Se repite cada semana. El nodo y el modelo de aprendizaje la usan como ocupación esperada.</p>
-        </div>
+        <Dialog size="sm" title="Nueva clase" onClose={() => { setForm(null); setFormError(null) }}
+          footer={<>
+            <button className="btn btn-secondary ml-auto" disabled={busy} onClick={() => { setForm(null); setFormError(null) }}>Cancelar</button>
+            <button className="btn btn-primary" disabled={busy || !form.start || !form.end || form.people < 1} onClick={addClass}>Guardar clase</button>
+          </>}>
+          <div className="flex flex-col gap-3">
+            <p className="text-sm text-slate-300">Todos los {['lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábados'][form.day]}, se repite cada semana.</p>
+            <div className="grid grid-cols-2 gap-3">
+              <label><span className="field-label">Inicio</span>
+                <input type="time" className="field" value={form.start} step={900} onChange={e => setForm({ ...form, start: e.target.value })} />
+              </label>
+              <label><span className="field-label">Fin</span>
+                <input type="time" className="field" value={form.end} step={900} onChange={e => setForm({ ...form, end: e.target.value })} />
+              </label>
+            </div>
+            <label><span className="field-label">Personas esperadas{cap ? ` (máx. ${cap})` : ''}</span>
+              <input type="number" className="field" min={1} max={cap || undefined} value={form.people} autoFocus
+                onChange={e => setForm({ ...form, people: Number(e.target.value) })}
+                onKeyDown={e => { if (e.key === 'Enter') addClass() }} />
+            </label>
+            {formError && <p className="text-sm text-red-300">{formError}</p>}
+          </div>
+        </Dialog>
       )}
       {selected && (
-        <div className="flex shrink-0 flex-wrap items-center gap-3 border-b border-slate-800 px-4 py-3">
-          <span className="text-sm text-slate-100">Clase de los {['lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábados'][selected.day]} · {selected.head} · {selected.sub}</span>
-          <button className="btn btn-secondary ml-auto" disabled={busy} onClick={removeClass}><Trash2 size={14} /> Eliminar clase</button>
-          <button className="btn btn-secondary" disabled={busy} onClick={() => { setSelected(null); setFormError(null) }}>Cerrar</button>
-        </div>
+        <Dialog size="sm" title="Clase" onClose={() => { setSelected(null); setFormError(null) }}
+          footer={<>
+            <button className="btn btn-secondary" disabled={busy} onClick={removeClass}><Trash2 size={14} /> Eliminar clase</button>
+            <button className="btn btn-secondary ml-auto" disabled={busy} onClick={() => { setSelected(null); setFormError(null) }}>Cerrar</button>
+          </>}>
+          <p className="text-sm text-slate-200">Todos los {['lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábados'][selected.day]} · {selected.head} · {selected.sub}</p>
+          {formError && <p className="mt-2 text-sm text-red-300">{formError}</p>}
+        </Dialog>
       )}
-      {formError && <p className="px-4 py-2 text-sm text-red-300">{formError}</p>}
       {error && <p className="px-4 py-2 text-sm text-red-300">{error}</p>}
           <div className="grid shrink-0 border-b border-slate-800" style={{ gridTemplateColumns: `3.5rem repeat(${days.length}, minmax(0, 1fr))` }}>
             <span />
@@ -164,13 +182,23 @@ export default function RoomWeek({ room }: { room: Room | undefined }) {
               ))}
             </div>
             {columns.map((col, i) => (
-              <div key={days[i]} className="relative border-l border-slate-800">
+              <div key={days[i]} className={`relative touch-none select-none border-l border-slate-800 ${isAdmin && room ? 'cursor-crosshair' : ''}`}
+                onPointerDown={isAdmin && room ? e => { e.currentTarget.setPointerCapture(e.pointerId); const m = minuteAt(e); setDrag({ day: days[i], from: m, to: m }) } : undefined}
+                onPointerMove={drag && drag.day === days[i] ? e => setDrag({ ...drag, to: minuteAt(e) }) : undefined}
+                onPointerUp={drag && drag.day === days[i] ? endDrag : undefined}>
+                {drag && drag.day === days[i] && (
+                  <div className="pointer-events-none absolute inset-x-1 z-10 rounded-md border border-blue-500 bg-blue-500/20 px-2 py-1 text-xs text-blue-100"
+                    style={{ top: top(Math.min(drag.from, drag.to)), height: height(Math.min(drag.from, drag.to), Math.max(drag.from, drag.to, Math.min(drag.from, drag.to) + 15)) }}>
+                    {hm(Math.min(drag.from, drag.to))}–{hm(Math.max(drag.from, drag.to))}
+                  </div>
+                )}
                 {Array.from({ length: H1 - H0 - 1 }, (_, h) => (
                   <span key={h} className="absolute inset-x-0 h-px bg-slate-800" style={{ top: top((H0 + h + 1) * 60) }} />
                 ))}
                 {col.map(b => (
                   <div key={b.key} title={b.tip}
                     role={isAdmin && b.isClass ? 'button' : undefined} tabIndex={isAdmin && b.isClass ? 0 : undefined}
+                    onPointerDown={e => e.stopPropagation()}
                     onClick={isAdmin && b.isClass ? () => { setForm(null); setFormError(null); setSelected({ ...b, day: days[i] }) } : undefined}
                     className={`absolute inset-x-1 flex overflow-hidden rounded-md border bg-slate-800 px-2 ${isAdmin && b.isClass ? 'cursor-pointer hover:border-slate-500 ' : ''}${selected?.key === b.key ? 'ring-1 ring-blue-500 ' : ''}${b.b - b.a <= 60 ? 'items-center' : 'flex-col gap-0.5 py-1'} ${b.dashed ? 'border-dashed border-slate-500' : 'border-slate-700'}`}
                     style={{ top: `calc(${top(b.a)} + 2px)`, height: `calc(${height(b.a, b.b)} - 4px)` }}>
