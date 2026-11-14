@@ -122,6 +122,16 @@ def occupancy_forecast(db_sql, room_id: str, reading_timestamp: datetime, minute
     return out
 
 
+async def log_forecast(db, room_id: str, ctrl: ForecastController) -> None:
+    """One document per decision (every 5 min): what the Aprendizaje tab draws and scores."""
+    at = datetime(1970, 1, 1) + timedelta(minutes=ctrl.last_decision)
+    await db["forecast_log"].replace_one({"_id": f"{room_id}|{at:%Y-%m-%dT%H:%M}"}, {
+        "_id": f"{room_id}|{at:%Y-%m-%dT%H:%M}", "room_id": room_id, "ts": at,
+        "forecast_30": ctrl.forecast_c, "forecast_30_p90": ctrl.peak_p90_c, "fan_pct": ctrl.fan_pct,
+        "model": getattr(ctrl.forecaster, "model_name", "persistencia"),
+    }, upsert=True)
+
+
 # One predictive controller per room, kept in memory and persisted in Mongo each minute.
 _SHADOW: dict[str, ForecastController] = {}
 
@@ -142,6 +152,7 @@ async def shadow_learning_step(db, room_id: str, reading: SensorReading, db_sql=
         _SHADOW[room_id] = ctrl
     ts = reading.timestamp.replace(tzinfo=None)
     ts_s = (ts - datetime(1970, 1, 1)).total_seconds()
+    decided_before = ctrl.last_decision
     if ctrl.closes_minute(ts_s):
         # A minute closes: the controller may forecast and decide, so tell it whether the
         # room is in use (the node sees people, or a class is on or starts within the horizon).
@@ -151,6 +162,8 @@ async def shadow_learning_step(db, room_id: str, reading: SensorReading, db_sql=
             in_use = any(c for c, _ in timetable)
         await run_in_threadpool(ctrl.step, ts_s, reading.temperature, in_use)   # Chronos runs here
         await db["forecast_state"].replace_one({"_id": room_id}, {"_id": room_id, **ctrl.to_state()}, upsert=True)
+        if ctrl.last_decision != decided_before:
+            await log_forecast(db, room_id, ctrl)
     else:
         ctrl.step(ts_s, reading.temperature)
     summary = ctrl.summary()

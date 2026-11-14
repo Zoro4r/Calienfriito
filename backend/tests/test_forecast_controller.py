@@ -127,3 +127,14 @@ def test_simulation_mode_skips_forecasts_while_the_room_is_idle():
     assert calls == [] and ctrl.fan_pct == 0
     feed(ctrl, 6, in_use=True, start_min=READY_MINUTES + 20)
     assert calls                                      # forecasts again once the room is in use
+
+
+def test_class_intervals_mix_weekly_and_one_day_classes():
+    from datetime import time as t_
+    from app.services.strategy_series import class_intervals
+    weekly = [(4, t_(15, 0), t_(17, 0), 20)]                                  # Fridays 15–17 local
+    one_off = [(datetime(2026, 11, 12, 20, 0), datetime(2026, 11, 12, 22, 0), 1)]
+    start, end = datetime(2026, 11, 12, 5, 0), datetime(2026, 11, 14, 5, 0)   # Thu–Fri local, in UTC
+    got = class_intervals(weekly, one_off, start, end)
+    assert got == [(datetime(2026, 11, 13, 1, 0), datetime(2026, 11, 13, 3, 0), 1),
+                   (datetime(2026, 11, 13, 20, 0), datetime(2026, 11, 13, 22, 0), 20)]
