@@ -36,7 +36,7 @@ def build_week(schedules: Iterable, reservations: Iterable, monday: date, show_u
             continue
         end = r.end_time if r.end_time.date() == r.start_time.date() else datetime.combine(r.start_time.date(), time(23, 59))
         blocks.append({
-            "room_id": r.room_id, "day": (r.start_time.date() - monday).days,
+            "id": getattr(r, "id", None), "room_id": r.room_id, "day": (r.start_time.date() - monday).days,
             "start": _hm(r.start_time.time()), "end": _hm(end.time()),
             "kind": "reservation", "people": r.expected_occupancy,
             "by": getattr(r, "username", None) if show_users else None,

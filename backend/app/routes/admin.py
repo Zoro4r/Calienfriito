@@ -960,7 +960,7 @@ def delete_room_schedule(
 
 
 class WeekBlockOut(BaseModel):
-    id: Optional[int] = None   # the class id (classes only), to delete it
+    id: Optional[int] = None   # schedule id (class) or reservation id (one day), to delete it
     room_id: str
     day: int             # 0=Monday … 6=Sunday
     start: str           # HH:MM local

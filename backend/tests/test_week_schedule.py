@@ -70,3 +70,9 @@ def test_week_blocks_carry_the_class_id():
     row = cls("B101", 2, 8, 10)
     row.id = 7
     assert build_week([row], [], MONDAY, show_users=False)[0]["id"] == 7
+
+
+def test_reservation_blocks_carry_their_id():
+    r = res("B101", datetime(2026, 11, 4, 9), datetime(2026, 11, 4, 11))
+    r.id = 12
+    assert build_week([], [r], MONDAY, show_users=False)[0]["id"] == 12
