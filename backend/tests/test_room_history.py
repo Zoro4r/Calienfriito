@@ -53,3 +53,11 @@ def test_fan_periods_keep_their_power_level():
     docs += [reading(T0 + timedelta(seconds=180))]
     fan = summarize_day(docs, 180, 2000)["fan"]
     assert [f["level"] for f in fan] == [100, 50]
+
+
+def test_class_time_follows_the_timetable_when_given():
+    docs = [reading(T0 + timedelta(seconds=30 * i), temp=26.0, occupied=False) for i in range(20)]   # node: empty
+    timetable = [(T0, T0 + timedelta(minutes=5), 12)]                                              # but a class
+    out = summarize_day(docs, 180, 2000, timetable)
+    assert out["summary"]["class_hours"] > 0 and out["summary"]["pct_out_of_band"] == 100.0
+    assert out["classes"][0]["people"] == 12

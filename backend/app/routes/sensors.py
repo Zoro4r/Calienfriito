@@ -392,6 +392,10 @@ async def room_history(
         logger.error("MongoDB unavailable: %s", exc)
         raise HTTPException(status_code=503, detail="Database unavailable") from exc
 
+    from app.services.strategy_series import class_intervals, room_timetable
+    timetable = class_intervals(*(await run_in_threadpool(room_timetable, db_sql, room_id)), start, end)
+    in_class = lambda iso: any(s_ <= datetime.fromisoformat(iso[:19]) < e_ for s_, e_, _ in timetable)  # noqa: E731
+
     if format == "csv":
         lines = ["timestamp_utc,temperature,humidity,co2_ppm,co_ppm,accion,ventilador_pct,calefactor,ocupada,alarma_co,manual,motivo"]
         for d in docs:
@@ -400,13 +404,13 @@ async def room_history(
             lines.append(",".join(str(v) for v in [
                 d["timestamp"][:19], "" if d.get("temperature") is None else d["temperature"], "" if d.get("humidity") is None else d["humidity"], d.get("co2_ppm") or "", d.get("co_ppm") or "",
                 ns.get("accion", ""), round((ns.get("ventilador_pwm") or 0) * 100 / 255), int(bool(ns.get("calefactor"))),
-                int((ns.get("co2_proxy") or 0) >= 2200), int(bool(ns.get("alarma_co"))), int(bool(ns.get("manual"))), f'"{motivo}"',
+                int(in_class(d["timestamp"])), int(bool(ns.get("alarma_co"))), int(bool(ns.get("manual"))), f'"{motivo}"',
             ]))
         return Response("\n".join(lines) + "\n", media_type="text/csv",
                         headers={"Content-Disposition": f'attachment; filename="historial_{room_id}_{anchor.isoformat()}.csv"'})
 
     equipment = equipment_for(meta, start, end)
-    result = summarize_day(docs, equipment["fan_max_w"], equipment["heater_w"])
+    result = summarize_day(docs, equipment["fan_max_w"], equipment["heater_w"], timetable)
     if meta and meta.get("start") and meta["start"] < end and meta["end"] >= start:
         # Simulated days know how many people came: same class intervals as "Aprendizaje".
         from app.services.strategy_series import _intervals

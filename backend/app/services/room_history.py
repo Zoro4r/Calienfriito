@@ -2,7 +2,8 @@
 
 Built from the node readings of one LOCAL calendar day:
   · series      — one point per 5 min: temperature, humidity, CO2, CO (max), fan %, heater %.
-  · classes     — intervals with people in the room (MQ-135 above the firmware threshold).
+  · classes     — the room's classes from its timetable (Horarios), as in Aprendizaje and
+                  Rentabilidad; without a timetable, the node's own occupancy decision.
   · summary     — class time outside the ideal range, fan / heater time and energy,
                   manual orders and CO alarms.
   · heater      — exact periods with the heater on (it is on/off, no power level).
@@ -40,8 +41,12 @@ def _ts(doc: dict) -> datetime:
     return datetime.fromisoformat(doc["timestamp"][:19])
 
 
-def summarize_day(docs: list[dict], fan_max_w: float, heater_w: float) -> dict:
-    """Series, classes, heater periods and summary from one day's readings (sorted)."""
+def summarize_day(docs: list[dict], fan_max_w: float, heater_w: float,
+                  timetable: list[tuple[datetime, datetime, int]] | None = None) -> dict:
+    """Series, classes, heater periods and summary from one day's readings (sorted).
+
+    `timetable`: the day's classes (naive UTC start, end, people). When given, class time
+    is the timetable's; otherwise the firmware's occupancy decision (accion != DISABLED)."""
     buckets: dict[datetime, dict] = {}
     occ_s = out_s = fan_s = heat_s = fan_wh = heat_wh = 0.0
     classes: list[dict] = []
@@ -59,7 +64,8 @@ def summarize_day(docs: list[dict], fan_max_w: float, heater_w: float) -> dict:
         dt = min(gap, MAX_GAP_S)
         fan = (ns.get("ventilador_pwm") or 0) / 255
         heat = 1.0 if ns.get("calefactor") else 0.0
-        occupied = ns.get("accion") not in (None, "DISABLED")   # the firmware's own occupancy decision
+        occupied = (any(s <= ts < e for s, e, _ in timetable) if timetable is not None
+                    else ns.get("accion") not in (None, "DISABLED"))
         temp = d.get("temperature")
 
         # 5-minute series
@@ -92,8 +98,8 @@ def summarize_day(docs: list[dict], fan_max_w: float, heater_w: float) -> dict:
         fan_wh += fan_max_w * fan ** 3 * dt / 3600
         heat_wh += heater_w * heat * dt / 3600
 
-        # classes (contiguous occupied readings)
-        if occupied:
+        # classes (contiguous occupied readings), when there is no timetable
+        if occupied and timetable is None:
             if classes and (ts - datetime.fromisoformat(classes[-1]["end"])).total_seconds() <= MAX_GAP_S:
                 classes[-1]["end"] = (ts + timedelta(seconds=dt)).strftime(FMT)
             else:
@@ -156,7 +162,8 @@ def summarize_day(docs: list[dict], fan_max_w: float, heater_w: float) -> dict:
 
     return {
         "series": series,
-        "classes": classes,
+        "classes": classes if timetable is None else [
+            {"start": s_.strftime(FMT), "end": e_.strftime(FMT), "people": p} for s_, e_, p in timetable],
         "heater": heater,
         "fan": fan_runs,
         "summary": {
