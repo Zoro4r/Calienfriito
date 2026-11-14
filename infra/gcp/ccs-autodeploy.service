@@ -1,0 +1,8 @@
+[Unit]
+Description=Deploy new commits of the ccs-prod branch
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/ccs-autodeploy.sh
