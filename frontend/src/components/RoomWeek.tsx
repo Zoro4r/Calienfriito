@@ -128,7 +128,7 @@ export default function RoomWeek({ room }: { room: Room | undefined }) {
           key: `${b.room_id}-${b.day}-${b.start}`, a: minutes(b.start), b: minutes(b.end), dashed: b.kind === 'reservation',
           line: `${b.start} · ${b.people} p.`,
           head: `${b.start}–${b.end}`,
-          sub: b.kind === 'class' ? `${b.people} personas` : `${b.people} personas · solo esta fecha`,
+          sub: `${b.people} ${b.people === 1 ? 'persona' : 'personas'}${b.kind === 'class' ? '' : ' · solo esta fecha'}`,
           tip: `${what} ${b.start}–${b.end}\n${b.people} personas${b.by ? ` · reservó ${b.by}` : ''}`,
         }
       }))
@@ -154,8 +154,8 @@ export default function RoomWeek({ room }: { room: Room | undefined }) {
       {form && (
         <Dialog size="sm" title="Nueva clase" onClose={() => { setForm(null); setFormError(null) }}
           footer={<div className="grid w-full grid-cols-2 gap-3">
-            <button className="btn btn-secondary justify-center" disabled={busy} onClick={() => { setForm(null); setFormError(null) }}>Cancelar</button>
-            <button className="btn btn-primary justify-center" disabled={busy || !form.start || !form.end || form.people < 1} onClick={addClass}>Guardar clase</button>
+            <button className="btn btn-secondary justify-center py-1.5 text-xs" disabled={busy} onClick={() => { setForm(null); setFormError(null) }}>Cancelar</button>
+            <button className="btn btn-primary justify-center py-1.5 text-xs" disabled={busy || !form.start || !form.end || form.people < 1} onClick={addClass}>Guardar clase</button>
           </div>}>
           <div className="flex flex-col gap-4">
             <div>
@@ -187,8 +187,8 @@ export default function RoomWeek({ room }: { room: Room | undefined }) {
       {selected && (
         <Dialog size="sm" title="¿Eliminar esta clase?" onClose={() => { setSelected(null); setFormError(null) }}
           footer={<div className="grid w-full grid-cols-2 gap-3">
-            <button className="btn btn-secondary justify-center" disabled={busy} onClick={() => { setSelected(null); setFormError(null) }}>Cancelar</button>
-            <button className="btn btn-danger justify-center" disabled={busy} onClick={removeClass}><Trash2 size={14} /> Eliminar</button>
+            <button className="btn btn-secondary justify-center py-1.5 text-xs" disabled={busy} onClick={() => { setSelected(null); setFormError(null) }}>Cancelar</button>
+            <button className="btn btn-danger justify-center py-1.5 text-xs" disabled={busy} onClick={removeClass}><Trash2 size={13} /> Eliminar</button>
           </div>}>
           <dl className="grid grid-cols-[6rem_1fr] gap-y-2 text-sm">
             <dt className="text-slate-400">Cuándo</dt>
@@ -197,8 +197,7 @@ export default function RoomWeek({ room }: { room: Room | undefined }) {
             <dt className="text-slate-400">Personas</dt><dd className="text-slate-100">{selected.sub.split(' · ')[0]}</dd>
           </dl>
           <p className="mt-3 text-xs leading-relaxed text-slate-400">
-            {selected.isClass ? 'Se quita de todas las semanas. ' : 'Se quita solo de esta fecha. '}
-            En ese horario el control predictivo ya no encenderá el ventilador por adelantado; el pronóstico se sigue calculando.
+            {selected.isClass ? 'Se quita de todas las semanas.' : 'Se quita solo de esta fecha.'}
           </p>
           {formError && <p className="mt-2 text-sm text-red-300">{formError}</p>}
         </Dialog>
