@@ -17,6 +17,7 @@ interface RoomUsage {
   rules_eq_hours: number       // full-power hours (speed³ · time), per month
   learning_hours: number
   learning_eq_hours: number
+  days?: number
   day_reference: number[]      // full-power hours per local hour of an average day
   day_rules: number[]
   day_learning: number[]
@@ -148,7 +149,7 @@ export default function ROIReport() {
             <input className="field h-7 w-16 px-2 py-0 text-xs" inputMode="decimal" value={watts} onChange={e => setWatts(e.target.value)} aria-label="Potencia del ventilador en W" /> W
             · tarifa S/
             <input className="field h-7 w-20 px-2 py-0 text-xs" inputMode="decimal" value={tariff} onChange={e => setTariff(e.target.value)} aria-label="Tarifa en soles por kWh" /> por kWh
-            ({data.tariff.label}) · {data.simulated ? 'Un mes simulado con el horario de clases de cada aula.' : `Temperatura medida por el nodo y horario del aula de los últimos ${data.real_days} días, llevados a un mes.`}
+            ({data.tariff.label}) · {data.simulated ? 'Un mes simulado con el horario de clases de cada aula.' : `Temperatura medida por el nodo y horario del aula en ${num(Math.max(...rooms.map(r => r.days ?? 0)), 0)} días con datos, llevados a un mes.`}
           </p>
         </>
       )}
