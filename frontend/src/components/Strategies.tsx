@@ -87,7 +87,7 @@ function StrategyStat({ label, summary, note }: { label: string; summary?: Summa
       <p className="mt-0.5 flex flex-wrap items-baseline gap-x-2 tabular-nums">
         <span className="text-xl font-semibold leading-7 text-white">{hasClasses ? duration(hot!) : '—'}</span>
         <span className="text-xs text-slate-300">
-          {note ?? (hasClasses ? `de clase sobre ${BAND_HI} °C` : 'sin clases este día')}
+          {note ?? (hasClasses ? `de clase sobre ${BAND_HI} °C` : 'sin clases en este período')}
         </span>
       </p>
       <p className="mt-0.5 h-4 text-xs leading-4 tabular-nums text-slate-400">
@@ -108,7 +108,7 @@ function ForecastStat({ f }: { f?: Forecast | null }) {
       <p className="text-xs leading-4 text-slate-400">Pronóstico a {f?.horizon_min ?? 30} min (Chronos-Bolt)</p>
       <p className="mt-0.5 flex flex-wrap items-baseline gap-x-2 tabular-nums">
         <span className="text-xl font-semibold leading-7 text-white">{ok ? `± ${fmt(f!.mae, 2)} °C` : '—'}</span>
-        <span className="text-xs text-slate-300">{ok ? 'error medio' : 'aún sin pronósticos este día'}</span>
+        <span className="text-xs text-slate-300">{ok ? 'error medio' : 'aún sin pronósticos en este período'}</span>
       </p>
       <p className="mt-0.5 h-4 text-xs leading-4 tabular-nums text-slate-400">
         {ok && <>Sin modelo (temperatura constante): ± {fmt(f!.mae_baseline, 2)} °C · {f!.pairs} comparaciones</>}
@@ -132,17 +132,19 @@ function RowTooltip({ active, payload, classes }: { active?: boolean; payload?: 
   )
 }
 
-function TemperatureChart({ rows, domain, start, end, classes }: { rows: Row[]; domain: [number, number]; start: number; end: number; classes: Occupancy[] }) {
-  // 00:00 to 24:00 every 3 h.
-  const xTicks = Array.from({ length: 9 }, (_, k) => start + k * 3 * HOUR)
-  const format = (ms: number) => ms >= end ? '24:00' : new Date(ms).toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' })
+function TemperatureChart({ rows, domain, start, end, classes, week }: { rows: Row[]; domain: [number, number]; start: number; end: number; classes: Occupancy[]; week: boolean }) {
+  // A day: 00:00 to 24:00 every 3 h. A week: one tick per day.
+  const xTicks = week ? Array.from({ length: 8 }, (_, k) => start + k * 24 * HOUR) : Array.from({ length: 9 }, (_, k) => start + k * 3 * HOUR)
+  const format = (ms: number) => week
+    ? (ms >= end ? '' : new Date(ms).toLocaleDateString('es', { weekday: 'short', day: 'numeric' }))
+    : ms >= end ? '24:00' : new Date(ms).toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' })
   const ticks = Array.from({ length: Math.floor((domain[1] - domain[0]) / 2) + 1 }, (_, k) => domain[0] + 2 * k)
   return (
     <ResponsiveContainer width="100%" height="100%">
       <LineChart data={rows} margin={{ top: 6, right: 22, left: 4, bottom: 14 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
         <XAxis dataKey="t" type="number" scale="time" domain={[start, end]} allowDataOverflow ticks={xTicks} interval={0} tickFormatter={format} {...AXIS}
-          label={{ value: 'Hora', position: 'insideBottom', offset: -10, fill: '#94a3b8', fontSize: 11 }} />
+          label={{ value: week ? 'Día' : 'Hora', position: 'insideBottom', offset: -10, fill: '#94a3b8', fontSize: 11 }} />
         <YAxis domain={domain} ticks={ticks} allowDataOverflow width={46} interval={0} {...AXIS}
           label={{ value: 'Temperatura (°C)', angle: -90, position: 'insideLeft', offset: 4, style: { textAnchor: 'middle' }, fill: '#94a3b8', fontSize: 11 }} />
         {classes.map(c => (
@@ -163,19 +165,21 @@ function TemperatureChart({ rows, domain, start, end, classes }: { rows: Row[]; 
 
 export default function Strategies({ roomId, emptyMessage }: { roomId: string; emptyMessage: string }) {
   const [day, setDay] = useState<string | null>(null)       // null: the day with the latest data
+  const [range, setRange] = useState<'1d' | '7d'>('1d')     // a day, or the week holding it
   const [data, setData] = useState<Response | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
     const q = day ? `&date=${day}` : ''
-    const load = () => api.get<Response>(`/sensors/rooms/${encodeURIComponent(roomId)}/strategies?range=1d${q}`)
+    setData(null)
+    const load = () => api.get<Response>(`/sensors/rooms/${encodeURIComponent(roomId)}/strategies?range=${range}${q}`)
       .then(r => { if (!cancelled) { setData(r.data); setError(null) } })
       .catch(err => { if (!cancelled) setError(getApiErrorDetail(err) ?? 'No se pudo cargar la comparación.') })
     load()
     const t = setInterval(load, POLL_MS)
     return () => { cancelled = true; clearInterval(t) }
-  }, [roomId, day])
+  }, [roomId, day, range])
 
   const rows = mergeRows(data?.rules, data?.learning, data?.forecast)
   const temps = rows.flatMap(r => [r.rules, r.learning, r.pred]).filter((v): v is number => v != null)
@@ -192,6 +196,12 @@ export default function Strategies({ roomId, emptyMessage }: { roomId: string; e
         {data?.date && data.start && data.end && (
           <DayNav date={data.date} start={data.start} end={data.end} dataStart={data.data_start} dataEnd={data.data_end} onChange={setDay} />
         )}
+        <div className="segmented p-0.5" role="radiogroup" aria-label="Período">
+          {([['1d', 'Día'], ['7d', 'Semana']] as const).map(([v, label]) => (
+            <button key={v} type="button" role="radio" aria-checked={range === v} onClick={() => setRange(v)}
+              className={`segmented-item px-3 py-1 text-xs ${range === v ? 'segmented-item-active' : ''}`}>{label}</button>
+          ))}
+        </div>
         {data && data.source !== 'none' && (
           <p className="min-w-0 flex-1 text-xs text-slate-400">
             {sim
@@ -219,7 +229,7 @@ export default function Strategies({ roomId, emptyMessage }: { roomId: string; e
               <Legend live={!sim} />
             </div>
             <div className="min-h-[220px] flex-1">
-              <TemperatureChart rows={rows} domain={[lo, hi]} start={start} end={end} classes={classes} />
+              <TemperatureChart rows={rows} domain={[lo, hi]} start={start} end={end} classes={classes} week={range === '7d'} />
             </div>
           </section>
         )}
