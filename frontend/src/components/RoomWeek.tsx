@@ -155,12 +155,17 @@ export default function RoomWeek({ room }: { room: Room | undefined }) {
         </Dialog>
       )}
       {selected && (
-        <Dialog size="sm" title="Clase" onClose={() => { setSelected(null); setFormError(null) }}
+        <Dialog size="sm" title="¿Eliminar esta clase?" onClose={() => { setSelected(null); setFormError(null) }}
           footer={<>
-            <button className="btn btn-secondary" disabled={busy} onClick={removeClass}><Trash2 size={14} /> Eliminar clase</button>
-            <button className="btn btn-secondary ml-auto" disabled={busy} onClick={() => { setSelected(null); setFormError(null) }}>Cerrar</button>
+            <button className="btn btn-secondary ml-auto" disabled={busy} onClick={() => { setSelected(null); setFormError(null) }}>Cancelar</button>
+            <button className="btn btn-danger" disabled={busy} onClick={removeClass}><Trash2 size={14} /> Eliminar clase</button>
           </>}>
-          <p className="text-sm text-slate-200">Todos los {['lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábados'][selected.day]} · {selected.head} · {selected.sub}</p>
+          <dl className="grid grid-cols-[6rem_1fr] gap-y-2 text-sm">
+            <dt className="text-slate-400">Día</dt><dd className="text-slate-100">Todos los {['lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábados'][selected.day]}</dd>
+            <dt className="text-slate-400">Horario</dt><dd className="tabular-nums text-slate-100">{selected.head}</dd>
+            <dt className="text-slate-400">Personas</dt><dd className="text-slate-100">{selected.sub}</dd>
+          </dl>
+          <p className="mt-3 text-xs text-slate-400">Se quita de todas las semanas. El control y el pronóstico dejarán de contar con esta clase.</p>
           {formError && <p className="mt-2 text-sm text-red-300">{formError}</p>}
         </Dialog>
       )}
