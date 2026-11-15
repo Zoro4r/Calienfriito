@@ -74,3 +74,13 @@ def test_manual_orders_are_not_compared_but_their_energy_counts():
     assert compare_reading(docs[0]) is None
     assert s["compared"] == 1 and s["excluded_manual"] == 1
     assert s["energy"]["node_fan_wh"] == pytest.approx(FAN_POWER_W * 10 / 3600, abs=1e-3)
+
+
+def test_smart_plug_uses_room_power_and_full_on_duty():
+    docs = [
+        reading("00:00", "STANDBY", ai="ON", mode="PRE-COOLING"),
+        reading("00:10", "STANDBY", ai="STANDBY"),
+    ]
+    energy = summarize(docs, fan_power_w=40.0, fan_type="smart_plug")["energy"]
+    assert energy["fan_power_w"] == 40.0
+    assert energy["ai_fan_wh"] == pytest.approx(40.0 * 10 / 3600, abs=1e-3)

@@ -10,6 +10,7 @@ STATUSES = {"pending", "active", "inactive"}
 #   heuristic → force the heuristic formula even when an ML model is loaded
 #   manual    → no prediction; hold the room at its configured target_temp
 CONTROL_POLICIES = {"auto", "heuristic", "manual"}
+FAN_TYPES = {"pwm_12v", "smart_plug"}
 
 
 class User(Base):
@@ -33,6 +34,8 @@ class Room(Base):
     target_temp = Column(Float, nullable=False)
     area_m2 = Column(Float, nullable=True)
     ceiling_height_m = Column(Float, nullable=True)
+    fan_type = Column(String, nullable=False, default="pwm_12v", server_default="pwm_12v")
+    fan_power_w = Column(Float, nullable=False, default=2.4, server_default="2.4")
     control_policy = Column(String, nullable=False, default="auto", server_default="auto")
     # Location, used to group and filter rooms in the UI (building → floor → room).
     building = Column(String, nullable=True, index=True)

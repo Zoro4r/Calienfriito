@@ -36,3 +36,6 @@ requests>=2.31
 
 # --- Ingesta MQTT (telemetria del nodo ESP32) ---
 aiomqtt>=2.0
+
+# --- Smart Life plug (Tuya official OpenAPI SDK) ---
+tuya-connector-python

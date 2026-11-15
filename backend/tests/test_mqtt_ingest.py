@@ -37,6 +37,25 @@ def test_keeps_node_occupancy_threshold():
     assert r.node_state["umbral_ocupacion"] == 260
 
 
+def test_keeps_actuator_presence_separate_from_requested_action():
+    data = {
+        **TELEMETRY,
+        "ventilador_pwm": 0,
+        "ventilador_conectado": False,
+        "calefactor_conectado": False,
+        "buzzer_conectado": False,
+        "ventilador_pwm_objetivo": 255,
+        "calefactor_objetivo": False,
+        "buzzer_objetivo": True,
+    }
+    r = telemetry_to_reading("ccs/A403/telemetry", json.dumps(data))
+    assert r.node_state["ventilador_pwm"] == 0
+    assert r.node_state["ventilador_pwm_objetivo"] == 255
+    assert r.node_state["ventilador_conectado"] is False
+    assert r.node_state["buzzer_objetivo"] is True
+    assert r.node_state["buzzer_conectado"] is False
+
+
 def test_keeps_reading_without_dht():
     # A failed DHT22 must not hide what the node does measure (CO2, CO, its state).
     data = {**TELEMETRY, "temp_c": None, "humedad": None}

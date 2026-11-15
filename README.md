@@ -109,6 +109,28 @@ La ingesta MQTT guarda temperatura, humedad, gases, node_state, cognitive_action
 
 La cámara y el nodo térmico son dispositivos independientes: comparten aula y broker, pero no deben compartir el mismo `sensor_id` térmico. Un conteo con confianza menor a 0,50 no se acepta como observación visual.
 
+## Ventilador Smart Life / Tuya
+
+En Infraestructura, configura **exactamente un aula** con tipo de ventilador `smart_plug`.
+El backend asocia el único enchufe a esa aula; no se necesita `TUYA_ROOM_ID`.
+El nodo sigue decidiendo localmente y publica su estado efectivo en
+`ccs/<aula>/telemetry`. El conector usa `ventilador_pwm_objetivo` cuando existe,
+o `ventilador_pwm`, y da prioridad a `alarma_co`. Ignora lecturas simuladas y
+no ejecuta los comandos MQTT retenidos directamente sobre el enchufe.
+
+Rellena en el `.env` **del backend** `TUYA_API_ENDPOINT`, `TUYA_ACCESS_ID`,
+`TUYA_ACCESS_SECRET`, `TUYA_DEVICE_ID` y `TUYA_SWITCH_CODE=switch_1`. La plantilla
+está en `.env.example`. Luego establece `TUYA_ENABLED=true` y reconstruye el
+backend para instalar el SDK: `docker compose up -d --build backend`. El secreto
+no debe colocarse en el frontend ni en el firmware. Si el backend está en otra
+máquina, rellena el `.env` de esa máquina.
+
+El conector consulta el estado de Tuya al cambiar la decisión y, si no cambia,
+como máximo una vez cada cinco minutos. Solo envía una orden cuando el estado
+reportado difiere del deseado. La vista de Infraestructura distingue estado
+confirmado, pendiente, no disponible y desactualizado. La verificación física
+del enchufe debe hacerse después de completar las credenciales.
+
 ## Límites que deben quedar explícitos
 
 - El calefactor existe en software, pero el montaje físico validado se concentra en el ventilador.

@@ -36,6 +36,8 @@ RETRY_SECONDS = 5
 NODE_STATE_FIELDS = (
     "accion", "motivo", "alarma_co", "ventilador_pwm", "ventilador_rpm", "calefactor", "buzzer", "led",
     "bloqueo_s", "pendiente", "ciclo", "uptime_s", "co2_proxy", "manual", "manual_restante_s", "umbral_ocupacion",
+    "ventilador_conectado", "calefactor_conectado", "buzzer_conectado",
+    "ventilador_pwm_objetivo", "calefactor_objetivo", "buzzer_objetivo",
 )
 
 # Node connectivity (RF-10), from ccs/<room>/status: "online" on connect and the
@@ -188,7 +190,13 @@ async def _ingest(topic: str, payload: bytes) -> None:
 
     db_sql = SessionLocal()
     try:
-        await process_reading(get_db(), reading, db_sql=db_sql)
+        result = await process_reading(get_db(), reading, db_sql=db_sql)
+        room = result.get("room_context") if isinstance(result, dict) else None
+        if room and reading.node_state:
+            from app.services.smart_plug import sync_from_telemetry
+
+            await sync_from_telemetry(db_sql, room["room_id"], reading.node_state,
+                                      is_simulated=reading.is_simulated)
     finally:
         db_sql.close()
 

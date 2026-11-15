@@ -66,7 +66,7 @@ export async function ensureNodeSensor(roomId: string) {
   }
 }
 
-// The node's board. "kit" is the breadboard build (DHT22 on D4, the template as is). "pcb" is the
+// The node's board. "kit" is the breadboard build (DHT11 on D4, the template as is). "pcb" is the
 // classmate's PCB: DHT11 on GPIO13, RGB LED on 32/33/25, fan PWM on 19 through a MOSFET, and no
 // tachometer or heater (pin -1: the firmware leaves them alone; RPM is estimated from the power).
 type Board = 'kit' | 'pcb'
@@ -78,7 +78,6 @@ const PCB_PINS: Record<string, number> = {
 function withBoard(code: string, board: Board) {
   if (board === 'kit') return code
   return code
-    .replace(/#define DHTTYPE(\s+)DHT\d+/, (_m, sp: string) => `#define DHTTYPE${sp}DHT11`)
     .replace(/^#define (\w+_PIN|DHTPIN)(\s+)-?\d+(\s+\/\/\s*)D\d+/gm, (m, key: string, sp: string, c: string) =>
       key in PCB_PINS ? `#define ${key}${sp}${PCB_PINS[key]}${c}${PCB_PINS[key] < 0 ? 'no existe en la PCB:' : `GPIO${PCB_PINS[key]}`}` : m)
     .replace(/const bool\s+TACOMETRO_SIMULADO(\s+)= false;/, 'const bool  TACOMETRO_SIMULADO$1= true;  // la PCB no tiene tacometro: RPM estimadas')
@@ -98,7 +97,7 @@ export function NodeSetup({ roomId }: { roomId: string }) {
   const [ssid, setSsid] = useState('')
   const [wifiPass, setWifiPass] = useState('')
   const [mqttPass, setMqttPass] = useState('')
-  // Which board: the kit (DHT22, its pins) or the classmate's PCB (DHT11 and its own pins).
+  // Which board: the kit (DHT11, its pins) or the classmate's PCB (DHT11 and its own pins).
   const [board, setBoard] = useState<Board>('kit')
   const [copied, setCopied] = useState(false)
 
@@ -153,7 +152,7 @@ export function NodeSetup({ roomId }: { roomId: string }) {
         <span className="text-xs text-slate-500">
           {board === 'pcb'
             ? 'DHT11 en GPIO13, LED en 32/33/25, ventilador en 19 e INA219 en SDA 4 / SCL 15; sin tacómetro.'
-            : 'DHT22 en D4 y los pines del armado en protoboard.'}
+            : 'DHT11 en D4 y los pines del armado en protoboard.'}
         </span>
       </div>}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">

@@ -72,10 +72,12 @@ def compare_reading(doc: dict) -> Optional[dict]:
     return {"node": n, "ai": a, "match": n == a}
 
 
-def ai_duty(cognitive_action: dict | None) -> int:
+def ai_duty(cognitive_action: dict | None, fan_type: str = "pwm_12v") -> int:
     ca = cognitive_action or {}
     if ca.get("ac_status") != "ON":
         return 0
+    if fan_type == "smart_plug":
+        return DUTY_FULL
     return DUTY_PRECOOL if ca.get("cooling_mode") == "PRE-COOLING" else DUTY_FULL
 
 
@@ -83,7 +85,8 @@ def _ts(doc: dict) -> datetime:
     return datetime.fromisoformat(doc["timestamp"])
 
 
-def summarize(docs: Iterable[dict], max_divergences: int = 20) -> dict:
+def summarize(docs: Iterable[dict], max_divergences: int = 20,
+              fan_power_w: float | None = FAN_POWER_W, fan_type: str = "pwm_12v") -> dict:
     """Coincidence, divergence detail and energy over readings sorted by time."""
     rows = [d for d in docs if d.get("node_state")]
     rows.sort(key=lambda d: d["timestamp"])
@@ -105,9 +108,9 @@ def summarize(docs: Iterable[dict], max_divergences: int = 20) -> dict:
         ca = d.get("cognitive_action") or {}
         simulated += bool(d.get("is_simulated"))
 
-        node_fan_wh += FAN_POWER_W * (node.get("ventilador_pwm") or 0) / 255 * dt / 3600
+        node_fan_wh += (fan_power_w or 0) * (node.get("ventilador_pwm") or 0) / 255 * dt / 3600
         heater_wh += HEATER_POWER_W * (1 if node.get("calefactor") else 0) * dt / 3600
-        ai_fan_wh += FAN_POWER_W * ai_duty(ca) / 255 * dt / 3600
+        ai_fan_wh += (fan_power_w or 0) * ai_duty(ca, fan_type) / 255 * dt / 3600
 
         if node.get("alarma_co"):
             alarm += 1
@@ -152,10 +155,10 @@ def summarize(docs: Iterable[dict], max_divergences: int = 20) -> dict:
         "divergences": divergences[-max_divergences:][::-1],   # most recent first
         "energy": {
             "hours": round(covered_s / 3600, 3),
-            "node_fan_wh": round(node_fan_wh, 3),
-            "ai_fan_wh": round(ai_fan_wh, 3),
+            "node_fan_wh": round(node_fan_wh, 3) if fan_power_w is not None else None,
+            "ai_fan_wh": round(ai_fan_wh, 3) if fan_power_w is not None else None,
             "node_heater_wh": round(heater_wh, 3),
-            "fan_power_w": FAN_POWER_W,
+            "fan_power_w": fan_power_w,
             "heater_power_w": HEATER_POWER_W,
             "method": "estimated",
         },

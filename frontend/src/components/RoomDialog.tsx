@@ -10,8 +10,8 @@ import { Dialog } from './ui'
 // A new room only asks for its name, which is also its code (the AULA of the ESP32); capacity
 // and target temperature start with defaults, and building and floor can be set later when editing.
 
-interface RoomForm { id: string; name: string; building: string; floor: string; max_capacity: string; target_temp: string; area_m2: string; ceiling_height_m: string }
-const EMPTY_ROOM: RoomForm = { id: '', name: '', building: '', floor: '', max_capacity: '30', target_temp: '24', area_m2: '', ceiling_height_m: '' }
+interface RoomForm { id: string; name: string; building: string; floor: string; max_capacity: string; target_temp: string; area_m2: string; ceiling_height_m: string; fan_type: 'pwm_12v' | 'smart_plug'; fan_power_w: string }
+const EMPTY_ROOM: RoomForm = { id: '', name: '', building: '', floor: '', max_capacity: '30', target_temp: '24', area_m2: '', ceiling_height_m: '', fan_type: 'pwm_12v', fan_power_w: '2.4' }
 type Impact = { reservations_count: number; sensors_count: number }
 
 export function friendly(err: unknown, fallback: string) {
@@ -28,6 +28,7 @@ export function useRoomForm(original: Room | null) {
     max_capacity: String(original.max_capacity), target_temp: String(original.target_temp),
     area_m2: original.area_m2 == null ? '' : String(original.area_m2),
     ceiling_height_m: original.ceiling_height_m == null ? '' : String(original.ceiling_height_m),
+    fan_type: original.fan_type ?? 'pwm_12v', fan_power_w: original.fan_power_w == null ? '' : String(original.fan_power_w),
   } : EMPTY_ROOM)
   // Rename: how many records move with the room. New room: history left by a deleted room with this code.
   const [moving, setMoving] = useState<Impact | null>(null)
@@ -68,6 +69,8 @@ export function useRoomForm(original: Room | null) {
   if ((f.area_m2 === '') !== (f.ceiling_height_m === '')) problems.push('Indica superficie y altura juntas.')
   if (f.area_m2 !== '' && !(Number(f.area_m2) > 0 && Number(f.area_m2) <= 10000)) problems.push('La superficie debe estar entre 0 y 10 000 m².')
   if (f.ceiling_height_m !== '' && !(Number(f.ceiling_height_m) > 0 && Number(f.ceiling_height_m) <= 20)) problems.push('La altura debe estar entre 0 y 20 m.')
+  if (f.fan_power_w !== '' && !(Number(f.fan_power_w) > 0 && Number(f.fan_power_w) <= 10000)) problems.push('La potencia del ventilador debe ser mayor que 0 y hasta 10 000 W.')
+  if (f.fan_power_w === '') problems.push('Indica la potencia nominal del ventilador.')
   if (!(t >= 16 && t <= 30)) problems.push('La temperatura objetivo debe estar entre 16 y 30 °C.')
   if (orphans && !inheritOk) problems.push('Confirma que la nueva aula heredará el historial existente.')
 
@@ -79,6 +82,8 @@ export function useRoomForm(original: Room | null) {
     floor: f.floor === '' ? null : Number(f.floor),
     area_m2: f.area_m2 === '' ? null : Number(f.area_m2),
     ceiling_height_m: f.ceiling_height_m === '' ? null : Number(f.ceiling_height_m),
+    fan_type: f.fan_type,
+    fan_power_w: Number(f.fan_power_w),
   }
 
   return { f, setF, code, renaming, moving, orphans, inheritOk, setInheritOk, problems, body, original }
@@ -117,12 +122,24 @@ export function RoomFields({ form, onSubmit }: { form: FormState; onSubmit: () =
       {field('area_m2', 'Superficie (m²)', { type: 'number', min: 0.01, max: 10000, step: 'any' })}
       {field('ceiling_height_m', 'Altura (m)', { type: 'number', min: 0.01, max: 20, step: 'any' })}
       {field('target_temp', 'Temperatura objetivo (°C)', { type: 'number', min: 16, max: 30, step: 0.5 })}
+      <label className="block">
+        <span className="field-label">Tipo de ventilador</span>
+        <select className="field" value={f.fan_type} onChange={e => {
+          const fan_type = e.target.value as RoomForm['fan_type']
+          setF({ ...f, fan_type, fan_power_w: fan_type !== f.fan_type ? (fan_type === 'smart_plug' ? '40' : '2.4') : f.fan_power_w })
+        }}>
+          <option value="pwm_12v">PWM · 2,4 W predeterminados</option>
+          <option value="smart_plug">AIR MONSTER 15729 · enchufe ON/OFF</option>
+        </select>
+      </label>
+      {field('fan_power_w', 'Potencia nominal (W)', { type: 'number', min: 0.1, max: 10000, step: 'any', placeholder: f.fan_type === 'smart_plug' ? '40 según etiqueta' : '2.4' })}
       <button type="submit" className="hidden" />
     </form>
     <p className="mt-2 text-xs text-slate-500">
       {f.area_m2 !== '' && f.ceiling_height_m !== '' && Number(f.area_m2) > 0 && Number(f.ceiling_height_m) > 0 &&
         <>Volumen para el modelo: {(Number(f.area_m2) * Number(f.ceiling_height_m)).toLocaleString('es-PE', { maximumFractionDigits: 2 })} m³. </>}
       La IA decide con la temperatura objetivo. El nodo trabaja con 24 °C; usa el mismo valor para que la comparación Nodo vs IA sea justa.
+      {' '}El enchufe inteligente solo admite apagado o encendido. Los 40 W del AIR MONSTER proceden de su etiqueta; la velocidad baja requiere medición para conocer su consumo.
     </p>
   </>
 }

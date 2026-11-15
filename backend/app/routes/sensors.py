@@ -420,6 +420,10 @@ async def room_history(
                         headers={"Content-Disposition": f'attachment; filename="historial_{room_id}_{anchor.isoformat()}.csv"'})
 
     equipment = equipment_for(meta, start, end)
+    if not (meta and meta.get("start") and meta["start"] < end and meta["end"] >= start):
+        configured_room = await run_in_threadpool(lambda: db_sql.query(Room).filter(Room.id == room_id).first())
+        if configured_room:
+            equipment["fan_max_w"] = configured_room.fan_power_w
     result = summarize_day(docs, equipment["fan_max_w"], equipment["heater_w"], timetable)
     result["summary"]["ina_energy_wh"] = next((value for value in reversed(ina_wh) if value is not None), None)
     if meta and meta.get("start") and meta["start"] < end and meta["end"] >= start:
@@ -477,7 +481,9 @@ async def room_strategies(
         if meta and (source == "simulation" or (source == "auto" and not real_node)):
             return await simulation_series(db, room_id, meta, range_key, anchor)
         timetable = await run_in_threadpool(room_timetable, db_sql, room_id)
-        data = await live_series(db, sensors, range_key, anchor, room_id, timetable) if sensors else None
+        configured_room = await run_in_threadpool(lambda: db_sql.query(Room).filter(Room.id == room_id).first())
+        data = await live_series(db, sensors, range_key, anchor, room_id, timetable,
+                                 configured_room.fan_power_w if configured_room else 2.4) if sensors else None
     except PyMongoError as exc:
         logger.error("MongoDB unavailable: %s", exc)
         raise HTTPException(status_code=503, detail="Database unavailable") from exc
@@ -532,7 +538,12 @@ async def strategy_comparison(
         return Response("\n".join(lines) + "\n", media_type="text/csv",
                         headers={"Content-Disposition": f'attachment; filename="comparacion_{room_id}.csv"'})
 
-    return {"room_id": room_id, "hours": hours, **summarize(docs)}
+    room_equipment = await run_in_threadpool(lambda: db_sql.query(Room).filter(Room.id == room_id).first())
+    return {"room_id": room_id, "hours": hours, **summarize(
+        docs,
+        fan_power_w=room_equipment.fan_power_w if room_equipment else 2.4,
+        fan_type=room_equipment.fan_type if room_equipment else "pwm_12v",
+    )}
 
 
 class DemoReadingIn(BaseModel):
@@ -799,6 +810,17 @@ def _require_room_control(db_sql: Session, current_user: User, room_id: str) -> 
         raise HTTPException(status_code=403, detail="No active reservation for this room. Control denied.")
 
 
+@router.get("/rooms/{room_id}/smart-plug")
+async def smart_plug_status(
+    room_id: str,
+    db_sql: Session = Depends(get_db_sql),
+    current_user: User = Depends(get_current_user),
+):
+    from app.services.smart_plug import room_status
+
+    return await room_status(db_sql, room_id)
+
+
 @router.post("/rooms/{room_id}/override", responses={403: {"model": ErrorDetail}, 503: {"model": ErrorDetail}})
 async def override_room(
     room_id: str,
@@ -820,12 +842,16 @@ async def override_room(
     if not 20 <= payload.level <= 100:
         raise HTTPException(status_code=422, detail="level must be between 20 and 100.")
     await run_in_threadpool(_require_room_control, db_sql, current_user, room_id)
+    room_fan_type = await run_in_threadpool(
+        lambda: getattr(db_sql.query(Room).filter(Room.id == room_id).first(), "fan_type", "pwm_12v")
+    )
 
     from app.config import MQTT_ENABLED
     from app.services.mqtt_ingest import publish_command
     if not MQTT_ENABLED:
         raise HTTPException(status_code=503, detail="MQTT is disabled on this server.")
-    command = override_command(payload.mode, payload.minutes, current_user.username, payload.level)
+    fan_level = 100 if room_fan_type == "smart_plug" and payload.mode in ("fan", "on") else payload.level
+    command = override_command(payload.mode, payload.minutes, current_user.username, fan_level)
     try:
         await publish_command(room_id, command)
     except Exception as exc:  # broker down or unreachable
@@ -837,7 +863,7 @@ async def override_room(
         "_id": room_id,
         "mode": "fan" if payload.mode == "on" else payload.mode,
         "minutes": None if payload.mode == "auto" else payload.minutes,
-        "level": payload.level if command.get("accion") == "COOLING" else None,
+        "level": fan_level if command.get("accion") == "COOLING" else None,
         "started_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
         "by": current_user.username,
     }

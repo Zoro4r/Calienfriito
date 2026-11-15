@@ -55,6 +55,12 @@ export interface NodeState {
   ventilador_rpm?: number          // measured by the fan's tachometer (estimated in Wokwi)
   calefactor?: boolean
   buzzer?: boolean
+  ventilador_conectado?: boolean
+  calefactor_conectado?: boolean
+  buzzer_conectado?: boolean
+  ventilador_pwm_objetivo?: number
+  calefactor_objetivo?: boolean
+  buzzer_objetivo?: boolean
   led?: string
   bloqueo_s?: number
   manual?: boolean            // manual override from the dashboard is active (RF-26)

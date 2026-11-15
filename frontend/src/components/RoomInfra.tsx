@@ -4,7 +4,7 @@ import { Pencil, Plug, RefreshCw, Trash2, ArrowRight } from 'lucide-react'
 import api from '../api/client'
 import type { StoredReading } from '../types'
 import { locationLabel, shortName, type Room } from '../utils/rooms'
-import NodeDiagram from './NodeDiagram'
+import NodeDiagram, { type SmartPlugStatus } from './NodeDiagram'
 import NodeConnectDialog from './NodeConnectDialog'
 import RoomDialog, { friendly } from './RoomDialog'
 import { Dialog } from './ui'
@@ -36,6 +36,7 @@ export default function RoomInfra({ room, notify, onRenamed, onDeleted }: {
 }) {
   const [devices, setDevices] = useState<Device[]>([])
   const [latest, setLatest] = useState<Record<string, StoredReading | null>>({})
+  const [smartPlug, setSmartPlug] = useState<SmartPlugStatus | null>(null)
   const [loading, setLoading] = useState(true)
   const [editing, setEditing] = useState(false)
   const [deleting, setDeleting] = useState(false)
@@ -50,11 +51,15 @@ export default function RoomInfra({ room, notify, onRenamed, onDeleted }: {
   const load = useCallback(() => Promise.all([
     api.get<Device[]>('/admin/devices'),
     api.get<Latest[]>('/sensors/latest?by=sensor').catch(() => ({ data: [] as Latest[] })),
-  ]).then(([d, ls]) => {
+    room.fan_type === 'smart_plug'
+      ? api.get<SmartPlugStatus>(`/sensors/rooms/${encodeURIComponent(room.id)}/smart-plug`).catch(() => ({ data: null }))
+      : Promise.resolve({ data: null }),
+  ]).then(([d, ls, plug]) => {
     setDevices(d.data ?? [])
     setLatest(Object.fromEntries((ls.data ?? []).map(x => [x.sensor_id ?? '', x.reading])))
+    setSmartPlug(plug.data)
   }).catch(e => notifyRef.current('error', friendly(e, 'No se pudo cargar el nodo del aula.')))
-    .finally(() => setLoading(false)), [])
+    .finally(() => setLoading(false)), [room.id, room.fan_type])
 
   useEffect(() => {
     load()
@@ -82,6 +87,7 @@ export default function RoomInfra({ room, notify, onRenamed, onDeleted }: {
       <div className="min-w-0">
         <h2 className="text-xl font-semibold text-white">{room.id} <span className="text-sm font-normal text-slate-400">{shortName(room)}</span></h2>
         <p className="mt-0.5 text-sm text-slate-400">{locationLabel(room)} · {room.max_capacity} personas · objetivo {room.target_temp} °C{room.volume_m3 != null ? ` · ${room.volume_m3} m³` : ''}</p>
+        <p className="mt-1 text-xs text-slate-400">Ventilador: {room.fan_type === 'smart_plug' ? 'enchufe inteligente · ON/OFF' : 'PWM · varios niveles'} · {room.fan_power_w == null ? 'potencia sin definir' : `${room.fan_power_w} W nominales`}</p>
       </div>
       <div className="ml-auto flex items-center gap-2">
         <Link to={`/room/${room.id}`} className="btn btn-ghost">Ver aula <ArrowRight size={14} /></Link>
@@ -99,7 +105,7 @@ export default function RoomInfra({ room, notify, onRenamed, onDeleted }: {
           <button className="btn btn-primary mt-4" onClick={() => setConnecting(true)}><Plug size={14} /> Conectar nodo</button>
         </div>
       ) : sensors.map(d => (
-        <NodeDiagram key={d.sensor_id} reading={latest[d.sensor_id]} active={d.is_active} header={<>
+        <NodeDiagram key={d.sensor_id} reading={latest[d.sensor_id]} active={d.is_active} fanType={room.fan_type} fanPowerW={room.fan_power_w} smartPlug={smartPlug} header={<>
           <span className="text-sm font-semibold text-white">Nodo <span className="font-mono">{d.sensor_id}</span></span>
           <label className="flex items-center gap-2 text-sm text-slate-300">
             <Switch checked={d.is_active} disabled={switching === d.sensor_id} onChange={v => toggle(d, v)} label={`Activar ${d.sensor_id}`} />

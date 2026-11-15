@@ -40,6 +40,14 @@ MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
 MQTT_TOPIC = os.getenv("MQTT_TOPIC", "ccs/+/telemetry")
 MQTT_OCCUPANCY_TOPIC = os.getenv("MQTT_OCCUPANCY_TOPIC", "ccs/+/occupancy")
 
+# Optional single Smart Life plug. Kept server-side; never sent to the browser.
+TUYA_ENABLED = os.getenv("TUYA_ENABLED", "false").lower() in ("1", "true", "yes")
+TUYA_API_ENDPOINT = os.getenv("TUYA_API_ENDPOINT", "").rstrip("/")
+TUYA_ACCESS_ID = os.getenv("TUYA_ACCESS_ID", "")
+TUYA_ACCESS_SECRET = os.getenv("TUYA_ACCESS_SECRET", "")
+TUYA_DEVICE_ID = os.getenv("TUYA_DEVICE_ID", "")
+TUYA_SWITCH_CODE = os.getenv("TUYA_SWITCH_CODE", "")
+
 # Occupancy fusion: visual count can replace the CO2 proxy, or be blended with it.
 # `visual` is the safe default once an ESP32-CAM is present because it is a direct
 # headcount; `blend` is useful while calibrating the camera against CO2.

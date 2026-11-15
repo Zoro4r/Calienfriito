@@ -71,12 +71,13 @@ function errorText(err: unknown) {
   return 'No se pudo enviar la orden.'
 }
 
-export default function NodeControl({ roomId, nodeState, stateAt, online, canControl }: {
+export default function NodeControl({ roomId, nodeState, stateAt, online, canControl, fanType }: {
   roomId: string
   nodeState: NodeState | null | undefined
   stateAt: string | null | undefined      // timestamp of the reading nodeState comes from
   online: boolean | undefined
   canControl: boolean
+  fanType: 'pwm_12v' | 'smart_plug'
 }) {
   const [pick, setPick] = useState<Mode>('fan')
   const [minutes, setMinutes] = useState(30)
@@ -85,6 +86,8 @@ export default function NodeControl({ roomId, nodeState, stateAt, online, canCon
   const [sending, setSending] = useState<string | null>(null)
   const [msg, setMsg] = useState<{ ok: boolean | null; text: string } | null>(null)   // null: neutral note
   const [now, setNow] = useState(Date.now())
+  const binaryFan = fanType === 'smart_plug'
+  const selectedLevel = binaryFan ? 100 : level
   // Offline preview: the order runs only on this screen so the control can be tried out.
   const [preview, setPreview] = useState<{ mode: Mode; level: number; total: number; start: number } | null>(null)
 
@@ -114,7 +117,7 @@ export default function NodeControl({ roomId, nodeState, stateAt, online, canCon
     && orderStart + order.minutes * 60_000 > now && (!stateAt || parseUtc(stateAt).getTime() < orderStart)
 
   const choice = OPTIONS.find(o => o.mode === pick)!
-  const fanPct = isPreview ? (preview!.mode === 'fan' ? preview!.level : 0) : Math.round(((nodeState?.ventilador_pwm ?? 0) / 255) * 100)
+  const fanPct = isPreview ? (preview!.mode === 'fan' ? preview!.level : 0) : Math.round((((binaryFan ? nodeState?.ventilador_pwm_objetivo : nodeState?.ventilador_pwm) ?? 0) / 255) * 100)
   // Preview RPM: the firmware's estimate for a 1 800 RPM fan (it stalls below ~20 %).
   const rpm = isPreview ? (fanPct >= 20 ? Math.round((1800 * fanPct) / 100) : 0) : nodeState?.ventilador_rpm
   const active = OPTIONS.find(o => o.mode === activeMode)
@@ -122,6 +125,7 @@ export default function NodeControl({ roomId, nodeState, stateAt, online, canCon
   const locked = running
 
   async function send(mode: Mode | 'auto', mins: number, lvl = 100) {
+    if (binaryFan && mode === 'fan') lvl = 100
     // Never queue an order for a node that is offline: the broker would keep it and the
     // node would apply it whenever it reconnects, maybe hours later.
     if (online === false) {
@@ -205,13 +209,13 @@ export default function NodeControl({ roomId, nodeState, stateAt, online, canCon
               </span>
               <span>
                 <span className="block text-sm text-slate-100">{o.title}</span>
-                <span className="block text-xs text-slate-400">{o.mode === 'fan' ? `Ventilador al ${level} %` : o.detail}</span>
+                <span className="block text-xs text-slate-400">{o.mode === 'fan' ? binaryFan ? 'Enchufe inteligente · encendido completo' : `Ventilador al ${selectedLevel} %` : o.detail}</span>
               </span>
             </button>
           ))}
         </div>
         <div className="grid grid-cols-2 gap-3">
-          {pick === 'fan' ? (
+          {pick === 'fan' && !binaryFan ? (
             <div>
               <p className="mb-1.5 text-xs text-slate-400">Potencia (%)</p>
               <div className="segmented grid grid-cols-4 p-0.5">
@@ -225,7 +229,7 @@ export default function NodeControl({ roomId, nodeState, stateAt, online, canCon
             </div>
           ) : null}
           {/* Without the power choice, Durante takes the whole row. */}
-          <div className={pick === 'fan' ? '' : 'col-span-2'}>
+          <div className={pick === 'fan' && !binaryFan ? '' : 'col-span-2'}>
             <p className="mb-1.5 text-xs text-slate-400">Durante</p>
             <div className="segmented grid grid-cols-4 p-0.5">
               {DURATIONS.map(d => (
@@ -237,9 +241,10 @@ export default function NodeControl({ roomId, nodeState, stateAt, online, canCon
             </div>
           </div>
         </div>
-        <button type="button" className="btn btn-primary w-full justify-center" disabled={!canControl || !!sending || locked} onClick={() => send(pick, minutes, level)}>
-          {sending === pick && !running && <RefreshCw size={14} className="animate-spin" />}{choice.title}{pick === 'fan' ? ` al ${level} %` : ''} · {durationLabel(minutes)}
+        <button type="button" className="btn btn-primary w-full justify-center" disabled={!canControl || !!sending || locked} onClick={() => send(pick, minutes, selectedLevel)}>
+          {sending === pick && !running && <RefreshCw size={14} className="animate-spin" />}{choice.title}{pick === 'fan' ? binaryFan ? ' · ON' : ` al ${selectedLevel} %` : ''} · {durationLabel(minutes)}
         </button>
+        {binaryFan && <p className="text-xs text-slate-500">Este ventilador solo admite ON/OFF. La orden pasa por el ESP32 y el conector Tuya si está habilitado; verifica el estado confirmado en Infraestructura.</p>}
         <p className={`text-xs ${locked ? 'text-slate-300' : msg ? (msg.ok === null ? 'text-slate-300' : msg.ok ? 'text-emerald-300' : 'text-red-300') : 'text-slate-500'}`}>
           {locked ? 'Hay una orden en curso: detenla o espera a que termine para enviar otra.'
             : msg?.text ?? (!canControl ? 'Tu rol no puede controlar el aula.'

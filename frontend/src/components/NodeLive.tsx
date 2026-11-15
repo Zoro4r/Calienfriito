@@ -129,28 +129,34 @@ export function ActuatorsCard({ node, children, className = '' }: { node: NodeSt
   const ledText = node?.led ? node.led.toLowerCase().replace(/^./, c => c.toUpperCase()) : '—'
   // One grid for every row: name · state (ON/OFF or the LED colour) · level, so the
   // states line up in one column whatever the row.
-  const Row = ({ label, on, tone, pct }: { label: string; on: boolean; tone: Tone; pct?: number }) => (
+  const Row = ({ label, on, tone, pct, connected }: { label: string; on: boolean; tone: Tone; pct?: number; connected?: boolean }) => (
     <>
       <span className="text-slate-400">{label}</span>
-      <StatusText tone={on ? tone : 'muted'}>{on ? 'ON' : 'OFF'}</StatusText>
-      <span className="text-right tabular-nums text-slate-200">{pct != null ? `${pct} %` : ''}</span>
+      <StatusText tone={connected === false ? 'muted' : on ? tone : 'muted'}>{connected === false ? 'Sin conectar' : on ? 'ON' : 'OFF'}</StatusText>
+      <span className="text-right tabular-nums text-slate-200">{connected !== false && pct != null ? `${pct} %` : ''}</span>
     </>
   )
   return (
     <Panel title="Actuadores" className={className}>
       <div className="grid grid-cols-[minmax(0,1fr)_auto_2.75rem] items-center gap-x-3 gap-y-1 text-xs">
-        <Row label="Ventilador" on={fan > 0} tone="info" pct={fan} />
-        {node?.ventilador_rpm != null && <>
+        <Row label="Ventilador" on={fan > 0} tone="info" pct={fan} connected={node?.ventilador_conectado} />
+        {node?.ventilador_conectado !== false && node?.ventilador_rpm != null && <>
           <span className="text-slate-400">Velocidad</span>
           <span className="col-span-2 text-right tabular-nums text-slate-200">{node.ventilador_rpm.toLocaleString('es')} RPM</span>
         </>}
-        <Row label="Buzzer" on={!!node?.buzzer} tone="alert" />
+        <Row label="Buzzer" on={!!node?.buzzer} tone="alert" connected={node?.buzzer_conectado} />
+        <Row label="Calefactor" on={!!node?.calefactor} tone="warn" connected={node?.calefactor_conectado} />
         <span className="text-slate-400">LED RGB</span>
         <span className="col-span-2 flex min-w-0 items-center gap-1.5">
           <span className="h-2.5 w-2.5 shrink-0 rounded-full ring-1 ring-slate-600" style={{ background: LED_COLOR[ledName] ?? '#1e293b' }} aria-hidden="true" />
           <span className="truncate text-slate-200" title={ledText}>{ledText}</span>
         </span>
       </div>
+      {node && (node.ventilador_conectado === false || node.calefactor_conectado === false || node.buzzer_conectado === false) && (
+        <p className="mt-2 text-xs text-slate-400">
+          Orden calculada: ventilador {Math.round(((node.ventilador_pwm_objetivo ?? 0) / 255) * 100)} %, calefactor {node.calefactor_objetivo ? 'ON' : 'OFF'}, buzzer {node.buzzer_objetivo ? 'ON' : 'OFF'}.
+        </p>
+      )}
       {children}
     </Panel>
   )

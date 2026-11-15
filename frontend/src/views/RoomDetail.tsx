@@ -28,6 +28,8 @@ interface RoomInfo {
   control_policy: string   // auto | heuristic | manual
   building?: string | null
   floor?: number | null
+  fan_type?: 'pwm_12v' | 'smart_plug'
+  fan_power_w?: number | null
 }
 
 interface SensorDevice {
@@ -412,7 +414,7 @@ export default function RoomDetail({ roomId, embeddedTab }: { roomId?: string; e
 
       {/* ── Control: manual override of the actuators (RF-26) ── */}
       {tab === 'control' && hasNode && id && (
-        <NodeControl roomId={id} nodeState={nodeState} stateAt={latest?.timestamp} online={nodes[id]?.online ?? false} canControl={!isGuest} />
+        <NodeControl roomId={id} nodeState={nodeState} stateAt={latest?.timestamp} online={nodes[id]?.online ?? false} canControl={!isGuest} fanType={room?.fan_type ?? 'pwm_12v'} />
       )}
 
       {/* ── Estrategias: rules act, learning runs in shadow ── */}

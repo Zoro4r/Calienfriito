@@ -63,6 +63,33 @@ def test_room_dimensions_must_be_complete_and_positive():
         RoomCreateIn(**base, area_m2=-1, ceiling_height_m=3)
 
 
+def test_room_fan_defaults_and_rejects_invalid_configuration():
+    from pydantic import ValidationError
+    from app.routes.admin import RoomCreateIn
+
+    base = {"id": "B201", "name": "B201", "max_capacity": 30, "target_temp": 24}
+    room = RoomCreateIn(**base)
+    assert room.fan_type == "pwm_12v" and room.fan_power_w == 2.4
+    plug = RoomCreateIn(**base, fan_type="smart_plug", fan_power_w=40)
+    assert plug.fan_power_w == 40
+    with pytest.raises(ValidationError):
+        RoomCreateIn(**base, fan_type="smart_plug", fan_power_w=0)
+    with pytest.raises(ValidationError):
+        RoomCreateIn(**base, fan_type="unknown")
+
+
+def test_room_fan_preset_switch_and_custom_power(db):
+    from app.routes.admin import RoomUpdateIn, _updated_fan_power, _room_out
+
+    room = db.query(Room).filter(Room.id == "A403").one()
+    assert _room_out(room)["fan_power_w"] == 2.4
+    base = {"name": room.name, "max_capacity": room.max_capacity, "target_temp": room.target_temp}
+    smart = RoomUpdateIn(**base, fan_type="smart_plug")
+    assert _updated_fan_power(smart, room) == 40.0
+    custom = RoomUpdateIn(**base, fan_type="smart_plug", fan_power_w=32)
+    assert _updated_fan_power(custom, room) == 32
+
+
 def test_reservation_overrides_schedule(db):
     db.add(Reservation(room_id="A403", user_id=1, expected_occupancy=12,
                        start_time=datetime(2026, 10, 26, 10, 0), end_time=datetime(2026, 10, 26, 11, 0)))

@@ -114,6 +114,8 @@ def test_node_firmware_fills_room_and_broker_only(as_role, monkeypatch):
     # WiFi and broker password are filled in the browser, never by the server.
     assert "__WIFI_SSID__" in code and "__WIFI_PASS__" in code and "__MQTT_PASS__" in code
     assert "__AULA__" not in code and "__MQTT_HOST__" not in code
+    assert "#define DHTTYPE      DHT11" in code
+    assert "DHT22" not in code
 
 
 @pytest.mark.parametrize("room", ["B 101", "B#1", "ccs/+", "x" * 21])

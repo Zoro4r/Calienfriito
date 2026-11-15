@@ -34,7 +34,7 @@ def remember_action(room_id: str, at: datetime, action: dict) -> None:
     _LAST_ACTION[room_id] = (at.replace(tzinfo=None), action)
 
 
-def order_for(action: dict) -> tuple[str, int]:
+def order_for(action: dict, fan_type: str = "pwm_12v") -> tuple[str, int]:
     """Manual order (mode, fan level) that reproduces a predictive decision.
 
     The fan at the requested power when the controller wants it on; otherwise "auto":
@@ -46,7 +46,7 @@ def order_for(action: dict) -> tuple[str, int]:
     if heat >= 50:
         return "heater", 100
     if fan >= 20:
-        return "fan", int(min(100, round(fan)))
+        return "fan", 100 if fan_type == "smart_plug" else int(min(100, round(fan)))
     return "auto", 100
 
 
@@ -77,7 +77,7 @@ async def send_learning_order(db, room_id: str, now: datetime | None = None) -> 
         return None                     # node silent: let the running order expire
     if await _user_order_running(db, room_id, now):
         return None
-    mode, level = order_for(last[1])
+    mode, level = order_for(last[1], last[1].get("fan_type", "pwm_12v"))
     command = override_command(mode, ORDER_MINUTES, ORDER_BY, level)
     await publish_command(room_id, command)
     order = {

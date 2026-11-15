@@ -12,7 +12,7 @@
  * ============================================================================
  *
  *  Funciones:
- *   1) Lectura de DHT22 (temperatura/humedad), MQ-135 (proxy de CO2 y de
+ *   1) Lectura de DHT11 (temperatura/humedad), MQ-135 (proxy de CO2 y de
  *      ocupacion) y MQ-7 (proxy de CO en ppm).
  *   2) Heuristica de control con setpoint de 24.0 C:
  *      ventilador ON con T >= 24.5 C y OFF con T <= 24.0 C;
@@ -42,7 +42,7 @@
  *   fila por sensor y por actuador:
  *     +-- CICLO 8   | t =   16.5 s ------------------------------
  *     | SENSORES
- *     |   DHT22      T = 26.0 C    CALIDO (T >= 24.5 C)
+ *     |   DHT11      T = 26.0 C    CALIDO (T >= 24.5 C)
  *     |              HR = 55 %     MODERADO (40 % < HR < 60 %)
  *     |   MQ-135     ADC 2800/4095   AULA OCUPADA (ADC >= 2200)
  *     |   MQ-7       CO = 91 ppm   ALARMA (CO >= 50 ppm)
@@ -68,8 +68,8 @@
  *   - PRE_COOLING lo dispara el modelo de IA (requiere la ocupacion esperada
  *     segun la reserva); este firmware implementa solo la heuristica.
  *   - PubSubClient publica en QoS 0 (el subscribe usa QoS 1).
- *   - El hardware real tambien usa DHT22 (±0.5 C, resolucion 0.1 C): la banda
- *     de ±0.5 C de la histeresis no se puede resolver con un DHT11 (±2 C, 1 C).
+ *   - El DHT11 tiene precision aproximada de ±2 C y resolucion de 1 C: la banda
+ *     de ±0.5 C de la histeresis no se puede evaluar con precision en este montaje.
  * ============================================================================
  */
 
@@ -90,7 +90,7 @@
 #endif
 #define FAN_PWM_CHANNEL 0 // solo se usa con la API antigua
 
-// El programa de la PCB habilita el INA219; la protoboard conserva GPIO4 para el DHT22.
+// El programa de la PCB habilita el INA219; la protoboard conserva GPIO4 para el DHT11.
 #define PCB_WITH_INA219 0
 #if PCB_WITH_INA219
 #include <Wire.h>
@@ -101,7 +101,7 @@ bool inaDisponible = false;
 
 // ---------------------------- Pines -----------------------------------------
 #define DHTPIN       4    // D4
-#define DHTTYPE      DHT22
+#define DHTTYPE      DHT11
 #define MQ135_PIN    34   // D34 (ADC1_CH6)
 #define MQ7_PIN      35   // D35 (ADC1_CH7)
 #define FAN_PWM_PIN  25   // D25 -> cable PWM (azul) del ventilador de PC de 4 pines (aqui: LED amarillo)
@@ -150,7 +150,7 @@ const int   FAN_PULSOS_POR_VUELTA     = 2;      // estandar de los ventiladores 
 const int   FAN_RPM_MAX               = 1800;   // ventilador de 120 mm a 12 V (para la simulacion)
 const int   FAN_PWM_HZ                = 100;    // ventilador de 2 cables via HW-517: su optoacoplador no conmuta a 25 kHz
 // Periodo de muestreo, control y telemetria MQTT (el dashboard recibe 1 dato/s).
-// El DHT22 solo se lee cada 2 s (limite de la libreria Adafruit): entre medio
+// La libreria Adafruit solo actualiza la lectura DHT cada 2 s: entre medio
 // devuelve la ultima lectura. MQ-135 y MQ-7 si se leen en cada ciclo.
 const unsigned long PERIODO_LECTURA_MS = 1000;
 
@@ -736,10 +736,10 @@ void imprimirBloqueCiclo(bool dhtOk, float tempC, float humedad,
     char valorTemp[16], valorHum[16];
     snprintf(valorTemp, sizeof(valorTemp), "T = %.1f C", tempC);
     snprintf(valorHum, sizeof(valorHum), "HR = %.0f %%", humedad);
-    Serial.printf("|   %-11s%-13s %s\r\n", "DHT22", valorTemp, clasificacionTemp);
+    Serial.printf("|   %-11s%-13s %s\r\n", "DHT11", valorTemp, clasificacionTemp);
     Serial.printf("|   %-11s%-13s %s\r\n", "", valorHum, clasificacionHum);
   } else {
-    Serial.printf("|   %-11ssin lectura\r\n", "DHT22");
+    Serial.printf("|   %-11ssin lectura\r\n", "DHT11");
   }
   if (ocupado) {
     Serial.printf("|   %-11sADC %4d/4095   AULA OCUPADA (ADC >= %d)\r\n", "MQ-135", mq135,
@@ -810,7 +810,7 @@ void setup() {
 
   escribirBuzzer(false);
   aplicarAccion(accionActual);
-  LOGF("SIS", "DHT22",      "sensor   | D4");
+  LOGF("SIS", "DHT11",      "sensor   | D4");
   LOGF("SIS", "MQ-135",     "sensor   | D34 (ADC1)");
   LOGF("SIS", "MQ-7",       "sensor   | D35 (ADC1)");
   LOGF("SIS", "Ventilador", "actuador | D25 (PWM)");
@@ -898,7 +898,7 @@ void loop() {
     }
   } else if (!dhtOk) {
     snprintf(motivoDecision, sizeof(motivoDecision),
-             "Sin lectura del DHT22: se mantiene el ultimo estado");
+             "Sin lectura del DHT11: se mantiene el ultimo estado");
   } else {
     float co2ppm = CO2_PPM_MIN + mq135 * (CO2_PPM_MAX - CO2_PPM_MIN) / 4095.0;
     actualizarNivelReglas(tempC, co2ppm);

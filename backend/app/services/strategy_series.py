@@ -154,15 +154,16 @@ LIVE_CACHE_S = 60
 
 
 async def live_series(db, sensors: list[str], range_key: str, anchor: date | None = None,
-                      room_id: str | None = None, timetable: tuple[list, list] = ([], [])) -> dict | None:
-    key = (tuple(sorted(sensors)), range_key, anchor)
+                      room_id: str | None = None, timetable: tuple[list, list] = ([], []),
+                      fan_power_w: float = NODE_FAN_MAX_W) -> dict | None:
+    key = (tuple(sorted(sensors)), range_key, anchor, fan_power_w)
     now = datetime.utcnow()
     hit = _LIVE_CACHE.get(key)
     if hit:
         ended = bool(hit[1]) and datetime.fromisoformat(hit[1]["end"]) <= hit[0]   # a past period: final
         if ended or (now - hit[0]).total_seconds() < LIVE_CACHE_S:
             return hit[1]
-    result = await _live_series(db, sensors, range_key, anchor, room_id, timetable)
+    result = await _live_series(db, sensors, range_key, anchor, room_id, timetable, fan_power_w)
     if len(_LIVE_CACHE) > 200:
         _LIVE_CACHE.clear()
     _LIVE_CACHE[key] = (now, result)
@@ -196,7 +197,8 @@ def room_timetable(db_sql, room_id: str) -> tuple[list, list]:
 
 
 async def _live_series(db, sensors: list[str], range_key: str, anchor: date | None = None,
-                       room_id: str | None = None, timetable: tuple[list, list] = ([], [])) -> dict | None:
+                       room_id: str | None = None, timetable: tuple[list, list] = ([], []),
+                       fan_power_w: float = NODE_FAN_MAX_W) -> dict | None:
     bucket_min = BUCKET_MIN[range_key]
     base = {"sensor_id": {"$in": sensors}, "node_state.accion": {"$exists": True}}
     last = await db["sensor_readings"].find(base, {"timestamp": 1}).sort("timestamp", -1).limit(1).to_list(length=1)
@@ -272,15 +274,15 @@ async def _live_series(db, sensors: list[str], range_key: str, anchor: date | No
     learn_rows = [{"_id": r["_id"], "temp": None, "fan": r.get("lfan"), "heat": 0.0} for r in rows]
     return {
         "source": "live",
-        "equipment": {"label": "Actuadores del nodo", "fan_max_w": NODE_FAN_MAX_W, "heater_w": NODE_HEATER_W},
+        "equipment": {"label": "Actuadores del nodo", "fan_max_w": fan_power_w, "heater_w": NODE_HEATER_W},
         "step_s": round(step_s, 1),
         **_frame(range_key, start, end, anchor, data_start, data_end),
         "occupancy": [{"start": s_.strftime(fmt_), "end": e_.strftime(fmt_), "people": p} for s_, e_, p in classes],
-        "rules": {"points": _points(rows), "summary": _summary(rules_totals, step_s, NODE_FAN_MAX_W, NODE_HEATER_W)},
+        "rules": {"points": _points(rows), "summary": _summary(rules_totals, step_s, fan_power_w, NODE_HEATER_W)},
         "forecast": forecast_accuracy(rows, bucket_min),
         "learning": {"points": _points(learn_rows),
                      "summary": _summary(t and {"fan3": lfan3, "heat": 0, "occ": occ * per_reading},
-                                         step_s, NODE_FAN_MAX_W, NODE_HEATER_W, comfort=False)},
+                                         step_s, fan_power_w, NODE_HEATER_W, comfort=False)},
     }
 
 

@@ -94,6 +94,8 @@ def get_room_context(db_sql, sensor_id: str, reading_timestamp: datetime) -> dic
         "expected_people": expected_people,
         "expected_source": expected_source,
         "control_policy": getattr(room, "control_policy", "auto") or "auto",
+        "fan_type": room.fan_type or "pwm_12v",
+        "fan_power_w": room.fan_power_w,
         "device_id": device.id,
     }
 
@@ -137,7 +139,7 @@ async def log_forecast(db, room_id: str, ctrl: ForecastController) -> None:
 _SHADOW: dict[str, ForecastController] = {}
 
 
-async def shadow_learning_step(db, room_id: str, reading: SensorReading, db_sql=None) -> dict | None:
+async def shadow_learning_step(db, room_id: str, reading: SensorReading, db_sql=None, fan_type: str = "pwm_12v") -> dict | None:
     """Run the predictive controller in shadow on a node reading.
 
     The node's rules act; the controller forecasts the temperature and returns what it
@@ -162,12 +164,15 @@ async def shadow_learning_step(db, room_id: str, reading: SensorReading, db_sql=
             timetable = await run_in_threadpool(occupancy_forecast, db_sql, room_id, ts, HORIZON_MIN)
             in_use = any(c for c, _ in timetable)
         await run_in_threadpool(ctrl.step, ts_s, reading.temperature, in_use)   # Chronos runs here
+        if fan_type == "smart_plug" and ctrl.fan_pct > 0:
+            ctrl.fan_pct = 100
         await db["forecast_state"].replace_one({"_id": room_id}, {"_id": room_id, **ctrl.to_state()}, upsert=True)
         if ctrl.last_decision != decided_before:
             await log_forecast(db, room_id, ctrl)
     else:
         ctrl.step(ts_s, reading.temperature)
     summary = ctrl.summary()
+    summary["fan_type"] = fan_type
     from app.services.room_controller import remember_action
     remember_action(room_id, ts, summary)
     return summary
@@ -206,6 +211,7 @@ async def process_reading(db, reading: SensorReading, db_sql=None) -> dict:
         )
 
     # Device inactive → skip telemetry entirely (don't even save to Mongo)
+    fan_type = room_context.get("fan_type", "pwm_12v") if isinstance(room_context, dict) else "pwm_12v"
     if isinstance(room_context, dict) and room_context.get("_device_ignored"):
         logger.info("Dropping telemetry for inactive device sensor_id=%s.", reading.sensor_id)
         return {"sensor_id": reading.sensor_id, "skipped": True, "reason": "device_inactive"}
@@ -232,7 +238,7 @@ async def process_reading(db, reading: SensorReading, db_sql=None) -> dict:
     room_id = room_context.get("room_id") if isinstance(room_context, dict) else shadow_room
     if room_id and reading.node_state and reading.temperature is not None:
         try:
-            learning_action = await shadow_learning_step(db, room_id, reading, db_sql=db_sql)
+            learning_action = await shadow_learning_step(db, room_id, reading, db_sql=db_sql, fan_type=fan_type)
         except Exception:   # the shadow controller must never block ingestion
             logger.exception("Learning shadow step failed for room %s", room_id)
 

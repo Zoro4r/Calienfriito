@@ -17,7 +17,9 @@ const STALE_MIN = 15
 const DOT: Record<Health, string> = { ok: 'bg-emerald-400', fault: 'bg-red-400', unknown: 'bg-slate-500' }
 const LED_NAME: Record<string, string> = { AZUL: 'Azul', VERDE: 'Verde', ROJO: 'Rojo', AMBAR: 'Ámbar', CIAN: 'Cian', APAGADO: 'Apagado', SIN: 'Apagado' }
 
-function parts(r: StoredReading | null | undefined) {
+export interface SmartPlugStatus { status: string; desired_on: boolean | null; actual_on: boolean | null; checked_at: string | null }
+
+function parts(r: StoredReading | null | undefined, fanType: 'pwm_12v' | 'smart_plug', fanPowerW?: number | null, smartPlug?: SmartPlugStatus | null) {
   const ns = r?.node_state ?? undefined
   const has = !!r
   const unknown = (name: string, pin: string, role: string): Part => ({ name, pin, role, health: 'unknown', state: 'Sin lecturas' })
@@ -41,7 +43,18 @@ function parts(r: StoredReading | null | undefined) {
   const pct = pwm == null ? null : Math.round((pwm / 255) * 100)
   const rpm = ns?.ventilador_rpm
   // The fan has 2 wires (no tachometer): it is switched by the HW-517, so 0 RPM is not a fault.
-  const fan: Part = !ns ? unknown('Ventilador 12 V', 'D25', 'Potencia por PWM (HW-517)')
+  const fan: Part = fanType === 'smart_plug'
+    ? { name: 'AIR MONSTER 15729', pin: 'Smart Life', role: `Enchufe ON/OFF · ${fanPowerW ?? 40} W nominales`,
+        health: smartPlug?.status === 'confirmed' ? 'ok' : 'unknown', on: smartPlug?.status === 'confirmed' ? !!smartPlug.actual_on : undefined,
+        state: smartPlug?.status === 'confirmed' ? `Enchufe ${smartPlug.actual_on ? 'encendido' : 'apagado'} (confirmado)`
+          : smartPlug?.status === 'pending' ? 'Orden enviada; esperando confirmación'
+          : smartPlug?.status === 'unavailable' ? 'Enchufe sin conexión confirmada'
+          : smartPlug?.status === 'stale' ? 'Estado del enchufe desactualizado'
+          : smartPlug?.status === 'awaiting_telemetry' ? 'Esperando telemetría del nodo'
+          : smartPlug?.status === 'ambiguous_room' ? 'Asigna el enchufe a una sola aula'
+          : smartPlug?.status === 'incomplete' ? 'Faltan credenciales Tuya'
+          : 'Integración Tuya desactivada' }
+    : !ns ? unknown('Ventilador 12 V', 'D25', 'Potencia por PWM (HW-517)')
     : { name: 'Ventilador 12 V', pin: 'D25', role: 'Potencia por PWM (HW-517)', health: 'ok', on: !!pct,
         state: pct ? `Al ${pct} %${rpm ? ` · ${rpm} RPM` : ''}` : 'Apagado' }
   const led = (ns?.led ?? '').split(' ')[0].toUpperCase()
@@ -72,19 +85,22 @@ function PartCard({ p, side }: { p: Part; side: 'left' | 'right' }) {
   )
 }
 
-export default function NodeDiagram({ reading, active, header }: {
+export default function NodeDiagram({ reading, active, header, fanType = 'pwm_12v', fanPowerW, smartPlug }: {
   reading: StoredReading | null | undefined
   active: boolean
   header: ReactNode
+  fanType?: 'pwm_12v' | 'smart_plug'
+  fanPowerW?: number | null
+  smartPlug?: SmartPlugStatus | null
 }) {
   const age = reading ? (Date.now() - parseUtc(reading.timestamp).getTime()) / 60_000 : null
   // A node that is not sending data (or is switched off here) is off: no old values.
   const off = !active || age == null || age > STALE_MIN
   const ina = !off && reading && (reading.ina_voltage_v != null || reading.ina_current_ma != null || reading.ina_power_mw != null) ? reading : null
-  const live = parts(reading)
+  const live = parts(reading, fanType, fanPowerW, smartPlug)
   const asOff = (ps: Part[]) => ps.map(p => ({ ...p, health: 'unknown' as Health, state: 'Apagado' }))
   const sensors = off ? asOff(live.sensors) : live.sensors
-  const actuators = off ? asOff(live.actuators) : live.actuators
+  const actuators = off ? live.actuators.map(p => fanType === 'smart_plug' && p.name === 'AIR MONSTER 15729' ? p : { ...p, health: 'unknown' as Health, state: 'Apagado' }) : live.actuators
   const all = [...sensors, ...actuators]
   const faults = all.filter(p => p.health === 'fault').length
   return (
