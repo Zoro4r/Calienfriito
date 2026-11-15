@@ -38,7 +38,7 @@ export default function Login() {
           <div className="inline-flex items-center justify-center w-16 h-16 rounded-xl bg-blue-600/15 border border-blue-500/30 mb-4">
             <Logo size={40} />
           </div>
-          <h1 className="text-xl font-semibold text-white">Climate Cognitive</h1>
+          <h1 className="text-xl font-semibold text-white">Calienfriito</h1>
           <p className="text-slate-400 text-sm mt-1">Sistema de Monitoreo IoT</p>
         </div>
 

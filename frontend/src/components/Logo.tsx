@@ -1,4 +1,4 @@
-// Climate Cognitive mark — a data wave threaded with AI nodes.
+// Calienfriito mark — a data wave threaded with AI nodes.
 // Single source for the brand glyph (sidebar, login, anywhere). Favicon lives
 // separately at /public/favicon.svg with the same geometry.
 export default function Logo({ size = 24, className = '' }: { size?: number; className?: string }) {
@@ -10,7 +10,7 @@ export default function Logo({ size = 24, className = '' }: { size?: number; cla
       fill="none"
       className={className}
       role="img"
-      aria-label="Climate Cognitive"
+      aria-label="Calienfriito"
     >
       <defs>
         <linearGradient id="ccsWave" x1="6" y1="10" x2="42" y2="34" gradientUnits="userSpaceOnUse">
