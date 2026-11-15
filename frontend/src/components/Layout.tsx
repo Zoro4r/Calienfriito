@@ -31,6 +31,8 @@ const NAV: { group: string; items: NavItem[] }[] = [
   ] },
 ]
 
+const ROLE_LABEL: Record<string, string> = { admin: 'Administrador', collaborator: 'Colaborador', guest: 'Invitado' }
+
 export default function Layout() {
   const { user, logout, isSessionExpired, clearSessionExpired } = useAuth()
   const navigate = useNavigate()
@@ -312,23 +314,24 @@ export default function Layout() {
           ))}
         </nav>
 
-        {/* Footer — who is signed in, and logout */}
-        <div className={`space-y-1 border-t border-slate-800 pb-4 pt-3 ${folded ? 'lg:px-2' : ''} px-3`}>
-          <div className={`flex items-center gap-2.5 px-3 py-1.5 ${folded ? 'lg:justify-center lg:px-0' : ''}`} title={folded ? `${user?.username} · ${user?.role}` : undefined}>
-            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-blue-600/30 text-xs font-semibold text-blue-300">
-              {user?.username?.[0]?.toUpperCase() ?? '?'}
-            </div>
-            <div className={`min-w-0 ${folded ? 'lg:hidden' : ''}`}>
-              <p className="truncate text-sm text-slate-200">{user?.username}</p>
-              <p className="text-xs capitalize text-slate-500">{user?.role}</p>
-            </div>
+        {/* Footer — who is signed in; logout as an icon. Folded: avatar over the icon. */}
+        <div className={`flex items-center gap-2.5 border-t border-slate-800 p-3 ${folded ? 'lg:flex-col lg:gap-2 lg:px-0' : ''}`}>
+          <div
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-blue-600/30 text-sm font-semibold text-blue-300"
+            title={folded ? `${user?.username ?? ''} · ${ROLE_LABEL[user?.role ?? ''] ?? user?.role ?? ''}` : undefined}
+          >
+            {user?.username?.[0]?.toUpperCase() ?? '?'}
+          </div>
+          <div className={`min-w-0 flex-1 ${folded ? 'lg:hidden' : ''}`}>
+            <p className="truncate text-sm font-medium text-slate-200">{user?.username}</p>
+            <p className="truncate text-xs text-slate-500">{ROLE_LABEL[user?.role ?? ''] ?? user?.role}</p>
           </div>
           <button
             onClick={handleLogout}
-            title={folded ? 'Cerrar sesión' : undefined}
-            className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-slate-400 transition-colors hover:bg-red-900/20 hover:text-red-400 ${folded ? 'lg:justify-center lg:px-0' : ''}`}
+            aria-label="Cerrar sesión" title="Cerrar sesión"
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-red-900/20 hover:text-red-400"
           >
-            <LogOut size={15} /> <span className={folded ? 'lg:hidden' : ''}>Cerrar sesión</span>
+            <LogOut size={16} />
           </button>
         </div>
       </aside>
