@@ -9,6 +9,7 @@ Despliega la rama `ccs-prod`.
 | `../docker-compose.gcp.yml` | Overlay sobre `docker-compose.yml` y `docker-compose.prod.yml`: monta la config de nginx para este dominio, le da a Mosquitto un listener TLS con contraseña y le dice al backend cómo llegan los nodos al broker (`NODE_MQTT_*`, lo que muestra "Conectar nodo"). |
 | `nginx.gcp.conf` | Copia de `frontend/nginx.prod.conf` con los dos nombres del servidor. |
 | `duckdns-update.sh` + `duckdns.service` / `duckdns.timer` | Cada 5 min le dice a DuckDNS la IP actual de la VM: si la IP cambia, el nombre sigue funcionando. |
+| `ccs-autodeploy.sh` + `ccs-autodeploy.service` / `ccs-autodeploy.timer` | Cada minuto revisa la rama `ccs-prod`; si hay commits nuevos hace `git pull` y despliega solo lo que cambió (frontend, backend o su imagen, compose, nginx o Mosquitto). |
 | `mosquitto.gcp.conf` | 1883 sin clave solo para el backend dentro de Docker (cerrado hacia internet); 8883 con TLS y usuario. |
 | `mqtt-certs-hook.sh` | Hook de certbot: copia el certificado para Mosquitto y reinicia Mosquitto y nginx al renovarse. |
 
@@ -36,9 +37,36 @@ sudo docker compose up -d --build
 
 ## Actualizar
 
+Automático: basta con hacer push a `ccs-prod`. En menos de un minuto `ccs-autodeploy.timer` lo
+detecta y despliega solo lo que cambió:
+
+| Cambio | Qué hace |
+|---|---|
+| `frontend/` | Reconstruye y levanta el frontend (~1 min). |
+| `backend/` (código) | Reinicia el backend (el código está montado como volumen). |
+| `backend/requirements*.txt` o `backend/Dockerfile` | Reconstruye la imagen del backend (~8 min, por PyTorch). |
+| `docker-compose*.yml` | `docker compose up -d` con la configuración nueva. |
+| `infra/gcp/nginx*` / `infra/gcp/mosquitto*` | Reinicia nginx (frontend) o Mosquitto. |
+
+Mientras un despliegue está en curso, las revisiones siguientes se saltan. Para ver qué desplegó:
+
+```sh
+journalctl -u ccs-autodeploy -n 50 --no-pager
+```
+
+Instalación (una vez):
+
+```sh
+sudo install -m 755 infra/gcp/ccs-autodeploy.sh /usr/local/bin/
+sudo cp infra/gcp/ccs-autodeploy.service infra/gcp/ccs-autodeploy.timer /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now ccs-autodeploy.timer
+```
+
+Manual, si hiciera falta:
+
 ```sh
 cd /opt/ccs && git pull && sudo docker compose up -d --build
 ```
 
-Si la IP de la VM cambia (por ejemplo, al detenerla y volver a encenderla), hay que cambiar el dominio
-en `nginx.gcp.conf` y en `mqtt-certs-hook.sh`, sacar un certificado nuevo y ajustar `MQTT_HOST` en el nodo.
+Si la IP de la VM cambia (por ejemplo, al detenerla y volver a encenderla), `duckdns.timer` actualiza el
+nombre en menos de 5 minutos: no hay que tocar el dominio, el certificado ni el nodo.
