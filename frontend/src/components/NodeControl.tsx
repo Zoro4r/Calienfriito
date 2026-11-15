@@ -146,11 +146,12 @@ export default function NodeControl({ roomId, nodeState, stateAt, online, canCon
   const mm = String(Math.floor(left / 60)).padStart(2, '0')
   const ss = String(Math.floor(left % 60)).padStart(2, '0')
 
+  // Fills the tab: two columns side by side when there is room (xl), stacked and scrolling otherwise.
   return (
-    <section className="surface grid grid-cols-1 overflow-hidden rounded-xl lg:grid-cols-[minmax(0,1fr)_400px]">
+    <section className="surface grid grid-cols-1 overflow-y-auto rounded-xl lg:min-h-0 lg:flex-1 xl:grid-cols-[minmax(0,1fr)_minmax(340px,440px)] xl:overflow-hidden">
       {/* Left · what is running now */}
-      <div className="flex flex-col items-center justify-center gap-3 border-b border-slate-800 p-5 lg:border-b-0 lg:border-r">
-        <div className="relative h-44 w-44">
+      <div className="flex flex-col items-center justify-center gap-4 border-b border-slate-800 p-5 sm:p-8 xl:border-b-0 xl:border-r">
+        <div className="relative h-44 w-44 sm:h-52 sm:w-52 xl:h-64 xl:w-64">
           <svg viewBox="0 0 240 240" className="absolute inset-0 h-full w-full" aria-hidden="true">
             <circle cx="120" cy="120" r={RING_R} fill="none" stroke="#1e293b" strokeWidth="10" />
             <circle cx="120" cy="120" r={RING_R} fill="none" stroke={COLOR[ringMode]} strokeWidth="10" strokeLinecap="round"
@@ -158,8 +159,8 @@ export default function NodeControl({ roomId, nodeState, stateAt, online, canCon
               style={{ transition: 'stroke-dashoffset 1s linear' }} />
           </svg>
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5">
-            <ModeIcon mode={ringMode} size={36} animate={alarm || (running && activeMode !== 'off')} power={alarm ? 100 : fanPct} />
-            <span className="text-xl font-semibold tabular-nums text-white">{alarm ? 'CO' : running ? `${mm}:${ss}` : 'Auto'}</span>
+            <ModeIcon mode={ringMode} size={40} animate={alarm || (running && activeMode !== 'off')} power={alarm ? 100 : fanPct} />
+            <span className="text-xl font-semibold tabular-nums text-white xl:text-3xl">{alarm ? 'CO' : running ? `${mm}:${ss}` : 'Auto'}</span>
             <span className="text-xs text-slate-400">{alarm ? 'alarma activa' : running ? 'restantes' : 'deciden las reglas'}</span>
           </div>
         </div>
@@ -196,8 +197,8 @@ export default function NodeControl({ roomId, nodeState, stateAt, online, canCon
         )}
       </div>
 
-      {/* Right · a new order */}
-      <div className="flex flex-col gap-3 p-5">
+      {/* Right · a new order, centred in the column's height */}
+      <div className="flex flex-col justify-center gap-3 p-5 sm:p-8">
         <h2 className="section-title">Nueva orden</h2>
         <div className="flex flex-col gap-2" role="radiogroup" aria-label="Qué forzar">
           {OPTIONS.map(o => (
