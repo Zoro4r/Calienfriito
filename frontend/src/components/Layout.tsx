@@ -1,11 +1,10 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect } from 'react'
 import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom'
 import {
   LayoutDashboard, FlaskConical, DoorOpen,
   Users, LogOut, TrendingUp,
-  AlertTriangle, X, ShieldAlert, Menu, Clock, ChevronDown,
+  AlertTriangle, X, ShieldAlert, Menu, PanelLeftClose, PanelLeftOpen,
 } from 'lucide-react'
-import axios from 'axios'
 import { useAuth } from '../context/AuthContext'
 import { useEmergency } from '../context/EmergencyContext'
 import Logo from './Logo'
@@ -40,41 +39,15 @@ export default function Layout() {
 
   // Mobile off-canvas sidebar — collapsed by default, auto-closes on route change.
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
-  const [userMenuOpen, setUserMenuOpen] = useState(false)
-  const userMenuRef = useRef<HTMLDivElement>(null)
-  useEffect(() => { setMobileNavOpen(false); setUserMenuOpen(false) }, [location.pathname])
+  useEffect(() => { setMobileNavOpen(false) }, [location.pathname])
 
-  // Close the navbar user menu when clicking outside it.
+  // Desktop sidebar: full (icons + labels) or folded to icons; remembered per browser.
+  const [folded, setFolded] = useState(() => {
+    try { return localStorage.getItem('ccs-sidebar-folded') === '1' } catch { return false }
+  })
   useEffect(() => {
-    function onDocClick(e: MouseEvent) {
-      if (userMenuRef.current && !userMenuRef.current.contains(e.target as Node)) setUserMenuOpen(false)
-    }
-    document.addEventListener('mousedown', onDocClick)
-    return () => document.removeEventListener('mousedown', onDocClick)
-  }, [])
-
-  // Navbar clock pill — HH:MM refreshed each minute.
-  const [clock, setClock] = useState(() =>
-    new Date().toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' })
-  )
-  useEffect(() => {
-    const t = setInterval(
-      () => setClock(new Date().toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' })),
-      60_000,
-    )
-    return () => clearInterval(t)
-  }, [])
-
-  // Server status — the only connection indicator in the app (polls /health).
-  const [serverOnline, setServerOnline] = useState<boolean | null>(null)
-  useEffect(() => {
-    const check = () => axios.get('/health', { timeout: 5_000 })
-      .then(() => setServerOnline(true))
-      .catch(() => setServerOnline(false))
-    check()
-    const t = setInterval(check, 15_000)
-    return () => clearInterval(t)
-  }, [])
+    try { localStorage.setItem('ccs-sidebar-folded', folded ? '1' : '0') } catch { /* private mode */ }
+  }, [folded])
 
   function handleLogout() {
     logout()
@@ -109,8 +82,6 @@ export default function Layout() {
 
   // Theming tokens — real = red, simulation = orange (clearly distinct hues).
   const overlayBg      = showReal ? 'bg-red-600/20'   : 'bg-orange-500/20'
-  const badgeColor     = showReal ? 'text-red-400'    : 'text-orange-400'
-  const badgeText      = showReal ? 'Alerta CO activa' : 'Simulación de CO activa'
   const iconBg         = showReal ? 'bg-red-600 hover:bg-red-500 shadow-red-900/50'
                                   : 'bg-orange-600 hover:bg-orange-500 shadow-orange-900/50'
   const tooltipText    = showReal
@@ -271,139 +242,99 @@ export default function Layout() {
         />
       )}
 
-      {/* ── Navbar — fixed, full-width top bar (52px) ── */}
-      <header className="fixed top-0 left-0 right-0 z-50 h-[52px] flex items-center justify-between px-5 bg-slate-900 border-b border-slate-800">
-        {/* Left — hamburger (mobile) + logo + name */}
-        <div className="flex items-center gap-2.5">
-          <button
-            onClick={() => setMobileNavOpen(true)}
-            className="p-1.5 -ml-1.5 rounded-lg text-slate-400 hover:text-slate-100 hover:bg-slate-700 transition-colors lg:hidden"
-            aria-label="Abrir menú"
-          >
-            <Menu size={20} />
-          </button>
-          <div className="flex items-center justify-center w-8 h-8">
-            <Logo size={22} />
-          </div>
-          <span className="font-semibold text-sm text-white leading-tight">
-            Climate <span className="text-blue-400">Cognitive</span>
-          </span>
-        </div>
-
-        {/* Right — status pills + separator + user chip */}
-        <div className="flex items-center gap-3">
-          {isAnyVisible && (
-            <span className={`hidden sm:flex items-center gap-1.5 text-xs font-semibold animate-pulse ${badgeColor}`}>
-              <AlertTriangle size={13} /> {badgeText}
-            </span>
-          )}
-
-          {/* Server status — real, from /health */}
-          <span
-            title={serverOnline === false ? 'El servidor no responde: los datos pueden estar desactualizados' : 'Servidor conectado'}
-            className={`hidden sm:inline-flex items-center gap-1.5 text-xs rounded-full px-2.5 py-1 ring-1 ${
-              serverOnline === false
-                ? 'text-red-300 bg-red-500/10 ring-red-500/30'
-                : serverOnline ? 'text-emerald-300 bg-emerald-500/10 ring-emerald-500/30' : 'text-slate-400 bg-slate-500/10 ring-slate-500/30'
-            }`}
-          >
-            <span className={`w-1.5 h-1.5 rounded-full ${serverOnline === false ? 'bg-red-400' : serverOnline ? 'bg-emerald-400' : 'bg-slate-500'}`} />
-            {serverOnline === false ? 'Servidor sin conexión' : serverOnline ? 'Servidor conectado' : 'Conectando…'}
-          </span>
-
-          {/* Current-time pill — refreshed each minute */}
-          <span className="hidden md:inline-flex items-center gap-1.5 text-xs text-slate-300 tabular-nums">
-            <Clock size={12} /> {clock}
-          </span>
-
-          {/* Vertical separator */}
-          <span className="hidden sm:block w-px h-[18px] bg-slate-700" />
-
-          {/* User chip + dropdown */}
-          <div className="relative" ref={userMenuRef}>
-            <button
-              onClick={() => setUserMenuOpen(o => !o)}
-              className="flex items-center gap-2 rounded-lg px-1.5 py-1 hover:bg-slate-700/60 transition-colors"
-            >
-              <div className="w-7 h-7 rounded-full bg-blue-600/30 flex items-center justify-center text-xs font-semibold text-blue-300">
-                {user?.username?.[0]?.toUpperCase() ?? '?'}
-              </div>
-              <span className="hidden sm:block text-sm font-medium text-slate-200 max-w-[120px] truncate">{user?.username}</span>
-              <ChevronDown size={14} className={`text-slate-400 transition-transform ${userMenuOpen ? 'rotate-180' : ''}`} />
-            </button>
-
-            {userMenuOpen && (
-              <div className="surface absolute right-0 top-full mt-2 w-52 shadow-2xl overflow-hidden z-50">
-                {/* Perfil — user info */}
-                <div className="flex items-center gap-2.5 px-3 py-3">
-                  <div className="w-8 h-8 rounded-full bg-blue-600/30 flex items-center justify-center text-sm font-semibold text-blue-300">
-                    {user?.username?.[0]?.toUpperCase() ?? '?'}
-                  </div>
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium text-slate-200 truncate">{user?.username}</p>
-                    <p className="text-xs text-slate-500 capitalize">{user?.role}</p>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      </header>
-
-      {/* ── Sidebar — fixed below navbar, navigation only ── */}
-      <aside
-        className={`fixed top-[52px] left-0 z-40 w-64 lg:w-56 h-[calc(100dvh-52px)] flex flex-col bg-slate-900 border-r border-slate-800 transform transition-transform duration-200 ease-out lg:translate-x-0 ${
-          mobileNavOpen ? 'translate-x-0' : '-translate-x-full'
-        }`}
+      {/* Mobile menu button — there is no top bar */}
+      <button
+        onClick={() => setMobileNavOpen(true)}
+        className="fixed left-3 top-3 z-30 rounded-lg border border-slate-800 bg-slate-900 p-2 text-slate-300 hover:text-white lg:hidden"
+        aria-label="Abrir menú"
       >
-        {/* Close button — mobile only */}
-        <button
-          onClick={() => setMobileNavOpen(false)}
-          className="self-end m-2 p-1 rounded-lg text-slate-400 hover:text-slate-100 hover:bg-slate-700 transition-colors lg:hidden"
-          aria-label="Cerrar menú"
-        >
-          <X size={18} />
-        </button>
+        <Menu size={18} />
+      </button>
 
-        <nav className="flex-1 px-3 py-4 space-y-4 overflow-y-auto">
+      {/* ── Sidebar — full height: brand, navigation, user ── */}
+      <aside
+        className={`fixed inset-y-0 left-0 z-40 flex w-64 flex-col border-r border-slate-800 bg-slate-900 transition-[transform,width] duration-200 ease-out lg:translate-x-0 ${
+          folded ? 'lg:w-16' : 'lg:w-56'
+        } ${mobileNavOpen ? 'translate-x-0' : '-translate-x-full'}`}
+      >
+        {/* Brand + fold (desktop) / close (mobile) */}
+        <div className={`flex h-14 shrink-0 items-center border-b border-slate-800 ${folded ? 'lg:justify-center lg:px-0' : ''} gap-2.5 px-4`}>
+          <Logo size={22} />
+          <span className={`flex-1 text-sm font-semibold text-white ${folded ? 'lg:hidden' : ''}`}>Calienfriito</span>
+          <button
+            onClick={() => setFolded(f => !f)}
+            className={`hidden rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-slate-800 hover:text-slate-100 lg:block ${folded ? 'lg:hidden' : ''}`}
+            aria-label="Plegar menú" title="Plegar menú"
+          >
+            <PanelLeftClose size={16} />
+          </button>
+          <button
+            onClick={() => setMobileNavOpen(false)}
+            className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-slate-700 hover:text-slate-100 lg:hidden"
+            aria-label="Cerrar menú"
+          >
+            <X size={18} />
+          </button>
+        </div>
+        {folded && (
+          <button
+            onClick={() => setFolded(false)}
+            className="mx-auto mt-3 hidden rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-slate-800 hover:text-slate-100 lg:block"
+            aria-label="Mostrar menú" title="Mostrar menú"
+          >
+            <PanelLeftOpen size={16} />
+          </button>
+        )}
+
+        <nav className={`flex-1 space-y-4 overflow-y-auto py-4 ${folded ? 'lg:px-2' : ''} px-3`}>
           {visible.map(g => (
             <div key={g.group} className="space-y-0.5">
-              <p className="px-3 pb-1 text-xs text-slate-500">{g.group}</p>
+              <p className={`px-3 pb-1 text-xs text-slate-500 ${folded ? 'lg:hidden' : ''}`}>{g.group}</p>
               {g.items.map(item => (
                 <NavLink
                   key={item.to}
                   to={item.to}
                   end={item.to === '/'}
+                  title={folded ? item.label : undefined}
                   className={({ isActive }) =>
-                    `group flex items-center gap-3 px-3 py-2 rounded-lg text-sm border transition-colors ${
+                    `group flex items-center gap-3 rounded-lg border px-3 py-2 text-sm transition-colors ${folded ? 'lg:justify-center lg:px-0' : ''} ${
                       isActive || (item.to === '/aulas' && location.pathname.startsWith('/room/'))
-                        ? 'bg-slate-800 text-white border-transparent'
-                        : 'text-slate-400 border-transparent hover:bg-slate-800/60 hover:text-white'
+                        ? 'border-transparent bg-slate-800 text-white'
+                        : 'border-transparent text-slate-400 hover:bg-slate-800/60 hover:text-white'
                     }`
                   }
                 >
                   {item.icon}
-                  <span className="flex-1">{item.label}</span>
-                  
+                  <span className={`flex-1 ${folded ? 'lg:hidden' : ''}`}>{item.label}</span>
                 </NavLink>
               ))}
             </div>
           ))}
         </nav>
 
-        {/* Footer — logout */}
-        <div className="px-3 pb-4 pt-3 border-t border-slate-800">
+        {/* Footer — who is signed in, and logout */}
+        <div className={`space-y-1 border-t border-slate-800 pb-4 pt-3 ${folded ? 'lg:px-2' : ''} px-3`}>
+          <div className={`flex items-center gap-2.5 px-3 py-1.5 ${folded ? 'lg:justify-center lg:px-0' : ''}`} title={folded ? `${user?.username} · ${user?.role}` : undefined}>
+            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-blue-600/30 text-xs font-semibold text-blue-300">
+              {user?.username?.[0]?.toUpperCase() ?? '?'}
+            </div>
+            <div className={`min-w-0 ${folded ? 'lg:hidden' : ''}`}>
+              <p className="truncate text-sm text-slate-200">{user?.username}</p>
+              <p className="text-xs capitalize text-slate-500">{user?.role}</p>
+            </div>
+          </div>
           <button
             onClick={handleLogout}
-            className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-slate-400 hover:text-red-400 hover:bg-red-900/20 transition-colors"
+            title={folded ? 'Cerrar sesión' : undefined}
+            className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-slate-400 transition-colors hover:bg-red-900/20 hover:text-red-400 ${folded ? 'lg:justify-center lg:px-0' : ''}`}
           >
-            <LogOut size={15} /> Cerrar sesión
+            <LogOut size={15} /> <span className={folded ? 'lg:hidden' : ''}>Cerrar sesión</span>
           </button>
         </div>
       </aside>
 
-      {/* ── Main content — offset by navbar height + sidebar width ── */}
-      <main className="mt-[52px] lg:ml-56 h-[calc(100dvh-52px)] overflow-y-auto p-4 sm:p-6">
+      {/* ── Main content — offset by the sidebar width ── */}
+      <main className={`h-dvh overflow-y-auto p-4 pt-16 transition-[margin] duration-200 sm:p-6 sm:pt-16 lg:pt-6 ${folded ? 'lg:ml-16' : 'lg:ml-56'}`}>
         <Outlet />
       </main>
 
