@@ -25,8 +25,9 @@ export function locationLabel(r: Pick<Room, 'building' | 'floor'>) {
 }
 
 // "A403 Aula Multipropósito" → "Aula Multipropósito" (the code is shown apart).
+// The part of the name that adds something to the code: '' when the name is just the code.
 export function shortName(r: Pick<Room, 'id' | 'name'>) {
-  return r.name.startsWith(r.id) ? r.name.slice(r.id.length).trim() || r.name : r.name
+  return r.name.startsWith(r.id) ? r.name.slice(r.id.length).replace(/^[\s·\-–—:]+/, '').trim() : r.name
 }
 
 const collator = new Intl.Collator('es', { numeric: true })
@@ -54,8 +55,8 @@ export function matchesQuery(r: Room, q: string) {
 export function roomOptions(rooms: Room[]) {
   return [...rooms].sort(compareRooms).map(r => ({
     value: String(r.id),
-    label: `${r.id} · ${shortName(r)}`,
-    hint: `${r.max_capacity} personas`,
+    label: shortName(r) ? `${r.id} · ${shortName(r)}` : r.id,
+    hint: `capacidad ${r.max_capacity}`,
     group: locationLabel(r),
   }))
 }

@@ -167,7 +167,7 @@ export default function RoomWeek({ room }: { room: Room | undefined }) {
     <div className="flex min-h-[32rem] flex-1 flex-col">
       <header className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b border-slate-800 px-4 py-3">
         <h2 className="text-sm font-semibold text-white">{room?.id ?? 'Sin aulas'}</h2>
-        {room && <span className="text-sm text-slate-400">{shortName(room)} · {locationLabel(room)}</span>}
+        {room && <span className="text-sm text-slate-400">{[shortName(room), locationLabel(room)].filter(Boolean).join(' · ')}</span>}
         <div className="ml-auto flex items-center gap-2">
           <button className="btn btn-secondary px-2" aria-label="Semana anterior" onClick={() => setAnchor(a => shiftDayBy(a, -7))}><ChevronLeft size={16} /></button>
           <span className="w-48 text-center text-sm font-semibold text-white">{range}</span>

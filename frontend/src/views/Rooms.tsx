@@ -266,7 +266,7 @@ export default function Rooms() {
             <header className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b border-slate-800 px-5 py-4">
               <div className="min-w-0">
                 <h2 className="text-xl font-semibold text-white">{room.id} <span className="text-sm font-normal text-slate-400">{shortName(room)}</span></h2>
-                <p className="mt-0.5 text-sm text-slate-400">{locationLabel(room)} · {room.max_capacity} personas</p>
+                <p className="mt-0.5 text-sm text-slate-400">{locationLabel(room)}</p>
               </div>
               <div className="ml-auto flex items-center gap-2">
                 {isAdmin && <button className="btn btn-ghost" onClick={() => setConnecting(room)}><Plug size={14} /> Conectar nodo</button>}
