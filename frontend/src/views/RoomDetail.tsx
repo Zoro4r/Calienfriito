@@ -339,15 +339,20 @@ export default function RoomDetail({ roomId, embeddedTab }: { roomId?: string; e
       ) : (
         <div className="flex flex-col gap-3 lg:min-h-0 lg:flex-1">
           {/* Row 1 · control state, sensors, actuators */}
-          {/* Embedded in Aulas the panel is narrower: two rows of three, so no card gets squeezed. */}
-          <div className={`grid shrink-0 grid-cols-2 gap-3 ${embedded ? 'md:grid-cols-3' : 'md:grid-cols-4 xl:grid-cols-[repeat(5,minmax(0,1fr))_1.2fr]'}`}>
-            {hasNode ? <ControlStateCard node={nodeState} className="col-span-2 xl:col-span-1" /> : (
-              <Panel title="Decisión de la IA" className="col-span-2 xl:col-span-1">
+          {/* Two rows: what the node decided and does (two wide cards), then the four readings.
+              Six cards in one row squeezed the actuators and stretched every card to their height. */}
+          <div className="grid shrink-0 grid-cols-2 gap-3 lg:grid-cols-4">
+            {hasNode ? <ControlStateCard node={nodeState} className="col-span-2" /> : (
+              <Panel title="Decisión de la IA" className="col-span-2">
                 <StatusText tone={ai?.tone ?? 'muted'}><span className="text-xl font-semibold text-white">{ai?.label ?? '—'}</span></StatusText>
                 <p className="mt-2 text-xs text-slate-400">{MODEL_LABEL[action?.model ?? 'none'] ?? action?.model} · setpoint {fmt(action?.target)} °C</p>
                 <p className="mt-1 text-xs text-slate-500">Sin nodo: la IA decide sin actuador local.</p>
               </Panel>
             )}
+            {hasNode
+              ? <ActuatorsCard node={nodeState} className="col-span-2" />
+              : <div className="col-span-2"><SensorCard label="CO₂" value={fmt(latest?.co2_ppm, 0)} unit="ppm"
+                  band={latest ? { text: getStatusLabel(levelCO2(latest.co2_ppm ?? 0)), tone: LEVEL_TONE[levelCO2(latest.co2_ppm ?? 0)] } : null} /></div>}
             <SensorCard label="Temperatura" value={fmt(latest?.temperature)} unit="°C"
               band={latest?.temperature == null ? (latest ? { text: 'Sin lectura del sensor DHT', tone: 'warn' } : null) : (hasNode ? tempBand(latest.temperature) : { text: `${getStatusLabel(levelTemp(latest.temperature, target))} (objetivo ${fmt(target)} °C)`, tone: LEVEL_TONE[levelTemp(latest.temperature, target)] })} />
             <SensorCard label="Humedad" value={fmt(latest?.humidity, 0)} unit="%" band={latest?.humidity == null ? (latest ? { text: 'Sin lectura del sensor DHT', tone: 'warn' } : null) : humBand(latest.humidity)} />
@@ -357,10 +362,6 @@ export default function RoomDetail({ roomId, embeddedTab }: { roomId?: string; e
                   band={nodeState?.co2_proxy != null ? occBand(nodeState.co2_proxy, occupiedThreshold) : null} />
               : <SensorCard label="Ocupación estimada" value={fmt(action?.actual_occupancy, 0)} unit={`/ ${room?.max_capacity ?? '—'}`}
                   band={latest ? { text: `CO₂ ${fmt(latest.co2_ppm, 0)} ppm`, tone: LEVEL_TONE[levelCO2(latest.co2_ppm ?? 0)] } : null} />}
-            {hasNode
-              ? <ActuatorsCard node={nodeState} className="col-span-2 xl:col-span-1" />
-              : <div className="col-span-2 xl:col-span-1"><SensorCard label="CO₂" value={fmt(latest?.co2_ppm, 0)} unit="ppm"
-                  band={latest ? { text: getStatusLabel(levelCO2(latest.co2_ppm ?? 0)), tone: LEVEL_TONE[levelCO2(latest.co2_ppm ?? 0)] } : null} /></div>}
           </div>
 
           {live && latest && (latest.ina_voltage_v != null || latest.ina_current_ma != null || latest.ina_power_mw != null) &&

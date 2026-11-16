@@ -138,7 +138,7 @@ export function ActuatorsCard({ node, children, className = '' }: { node: NodeSt
   )
   return (
     <Panel title="Actuadores" className={className}>
-      <div className="grid grid-cols-[minmax(0,1fr)_auto_2.75rem] items-center gap-x-3 gap-y-1 text-xs">
+      <div className="grid grid-cols-[auto_minmax(0,1fr)_2.75rem] items-center gap-x-4 gap-y-1 text-xs">
         <Row label="Ventilador" on={fan > 0} tone="info" pct={fan} connected={node?.ventilador_conectado} />
         {node?.ventilador_conectado !== false && node?.ventilador_rpm != null && <>
           <span className="text-slate-400">Velocidad</span>
