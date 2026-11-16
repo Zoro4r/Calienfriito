@@ -1001,6 +1001,37 @@ def add_room_schedule(
             "end_time": payload.end_time, "expected_people": row.expected_people}
 
 
+@router.put("/rooms/{room_id}/schedules/{schedule_id}", response_model=ScheduleOut,
+            responses={403: {"model": ErrorDetail}, 404: {"model": ErrorDetail}, 409: {"model": ErrorDetail}})
+def update_room_schedule(
+    room_id: str,
+    schedule_id: int,
+    payload: ScheduleIn,
+    db: Session = Depends(get_db_sql),
+    current_user: User = Depends(get_current_user),
+):
+    """Edit a weekly class (admins): day, hours and expected people. 409 if it would
+    overlap another class of the room or exceed its capacity."""
+    from app.services.week_schedule import class_problem
+    _require_admin(current_user)
+    row = db.query(Schedule).filter(Schedule.id == schedule_id, Schedule.room_id == room_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Clase no encontrada.")
+    room = db.query(Room).filter(Room.id == room_id).first()
+    start = datetime.strptime(payload.start_time, "%H:%M").time()
+    end = datetime.strptime(payload.end_time, "%H:%M").time()
+    others = db.query(Schedule).filter(Schedule.room_id == room_id, Schedule.id != schedule_id).all()
+    problem = class_problem(payload.day_of_week, start, end, payload.expected_people,
+                            room.max_capacity if room else None, others)
+    if problem:
+        raise HTTPException(status_code=409, detail=problem)
+    row.day_of_week, row.start_time, row.end_time = payload.day_of_week, start, end
+    row.expected_people = payload.expected_people
+    db.commit()
+    return {"id": row.id, "day_of_week": row.day_of_week, "start_time": payload.start_time,
+            "end_time": payload.end_time, "expected_people": row.expected_people}
+
+
 @router.delete("/rooms/{room_id}/schedules/{schedule_id}", status_code=204,
                responses={403: {"model": ErrorDetail}, 404: {"model": ErrorDetail}})
 def delete_room_schedule(

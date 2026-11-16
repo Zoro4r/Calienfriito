@@ -178,6 +178,13 @@ def test_class_payload_is_validated(as_role):
     assert r.status_code == 422
 
 
+def test_collaborator_cannot_edit_classes(as_role):
+    as_role("collaborator")
+    r = client.put("/api/v1/admin/rooms/B101/schedules/1",
+                   json={"day_of_week": 0, "start_time": "08:00", "end_time": "10:00", "expected_people": 20})
+    assert r.status_code == 403
+
+
 def test_sensor_ingest_rejects_wrong_api_key(monkeypatch):
     monkeypatch.setattr(deps, "WATSON_EXTENSION_KEY", "expected-key")
     res = client.post("/api/v1/sensors/", json={}, headers={"X-API-Key": "wrong"})
