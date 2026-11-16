@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
-import { Pencil, Plug, RefreshCw, Trash2, ArrowRight } from 'lucide-react'
+import { Pencil, Plug, RefreshCw, Trash2 } from 'lucide-react'
 import api from '../api/client'
 import type { StoredReading } from '../types'
 import { locationLabel, shortName, type Room } from '../utils/rooms'
@@ -90,7 +89,6 @@ export default function RoomInfra({ room, notify, onRenamed, onDeleted }: {
         <p className="mt-1 text-xs text-slate-400">Ventilador: {room.fan_type === 'smart_plug' ? 'enchufe inteligente · ON/OFF' : 'PWM · varios niveles'} · {room.fan_power_w == null ? 'potencia sin definir' : `${room.fan_power_w} W nominales`}</p>
       </div>
       <div className="ml-auto flex items-center gap-2">
-        <Link to={`/room/${room.id}`} className="btn btn-ghost">Ver aula <ArrowRight size={14} /></Link>
         <button className="btn btn-secondary" onClick={() => setEditing(true)}><Pencil size={14} /> Editar aula</button>
       </div>
     </header>

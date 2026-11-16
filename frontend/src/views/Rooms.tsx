@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
-import { Plus, Plug, RefreshCw } from 'lucide-react'
+import { Link, useSearchParams } from 'react-router-dom'
+import { ArrowRight, Plus, Plug, RefreshCw } from 'lucide-react'
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts'
 import api from '../api/client'
 import { useAuth } from '../context/AuthContext'
@@ -270,6 +270,7 @@ export default function Rooms() {
               </div>
               <div className="ml-auto flex items-center gap-2">
                 {isAdmin && <button className="btn btn-ghost" onClick={() => setConnecting(room)}><Plug size={14} /> Conectar nodo</button>}
+                <Link to={`/room/${room.id}`} className="btn btn-ghost">Ver aula <ArrowRight size={14} /></Link>
               </div>
             </header>
 
