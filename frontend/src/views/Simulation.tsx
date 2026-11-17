@@ -268,7 +268,7 @@ export default function Simulation() {
               <span className="text-sm text-slate-400">Porque {info.why}</span>
               <span className="text-xs text-slate-500">
                 Se envía a {roomId} cada {SEND_EVERY_MS / 1000} s: se ve en <Link to={`/aulas?aula=${roomId}`} className="text-slate-300 hover:underline">Aulas</Link>,{' '}
-                <Link to={`/room/${roomId}`} className="text-slate-300 hover:underline">En vivo</Link> y <Link to="/" className="text-slate-300 hover:underline">Resumen</Link>.
+                <Link to={`/aulas/${encodeURIComponent(roomId)}`} className="text-slate-300 hover:underline">En vivo</Link> y <Link to="/" className="text-slate-300 hover:underline">Resumen</Link>.
               </span>
             </> : <span className="text-sm text-slate-500">Sin enviar. Elige un escenario o ajusta un valor.</span>}
           </div>

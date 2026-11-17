@@ -13,7 +13,7 @@ La implementación actual tiene dos modos:
 
 Producción se compone con docker-compose.yml, infra/docker-compose.prod.yml e infra/docker-compose.gcp.yml. Ver [infra/gcp/README.md](infra/gcp/README.md).
 
-El firmware ejecutable directamente en Wokwi es una simulación de A403: usa host.wokwi.internal:1883, sensores simulados y is_simulated: true. En “Conectar nodo”, el dashboard genera un programa térmico desde backend/app/firmware/nodo.ino.tmpl o un programa de transporte para ESP32-CAM desde backend/app/firmware/camara.ino.tmpl, con aula, Wi-Fi y broker configurados. La cámara publica su conteo en `ccs/<aula>/occupancy`; el modelo ESP-WHO/TFLite debe enlazarse en el adaptador `detectPeople()` antes de usarla en producción.
+El firmware ejecutable directamente en Wokwi es una simulación de A403: usa host.wokwi.internal:1883, sensores simulados y is_simulated: true. En “Conectar nodo”, el dashboard genera un programa térmico desde backend/app/firmware/nodo.ino.tmpl o un programa para ESP32-CAM desde backend/app/firmware/camara.ino.tmpl, con aula, Wi-Fi y broker configurados. La cámara procesa los frames localmente mediante un modelo de fondo adaptativo y publica el aforo estimado en `ccs/<aula>/occupancy`.
 
 ## Qué hace el sistema
 
@@ -80,6 +80,77 @@ Para cargar datos semilla:
 
 Abre hardware/firmware o tools/vscode/ccs.code-workspace, compila con PlatformIO y ejecuta hardware/firmware/diagram.json en Wokwi. El nodo publica ccs/A403/telemetry. Los potenciómetros del circuito son proxies de MQ-135/MQ-7, no una calibración química real.
 
+## Probar el flujo Resumen → Aulas → detalle
+
+Levanta el entorno de desarrollo con los comandos de la sección anterior y abre
+<http://localhost:3000> con una cuenta válida. El recorrido funcional queda
+separado en tres niveles:
+
+1. `/` muestra **Resumen**, exclusivamente con el estado global, alertas e
+   indicadores que requieren atención.
+2. `/aulas` muestra **Aulas** como inventario y comparador. Prueba la búsqueda,
+   los filtros y la ordenación, y usa **Abrir detalle** sobre un aula.
+3. `/aulas/:id` concentra la operación, automatización, historial, control,
+   configuración y hardware del aula elegida. Comprueba que volver a **Aulas**
+   no conserve herramientas de detalle duplicadas.
+
+La ruta anterior `/room/:id` se conserva temporalmente solo como redirección a
+`/aulas/:id`; no debe usarse para enlaces nuevos. Para validar el frontend antes
+de entregar cambios:
+
+```bash
+cd frontend
+npm ci
+npm run build
+```
+
+## Cargar el firmware en dos etapas
+
+La puesta en marcha de una placa física se realiza en este orden. Cada sketch
+ocupa su propia carpeta porque Arduino exige que el archivo `.ino` principal
+coincida con el nombre de la carpeta.
+
+1. Abre
+   `hardware/firmware/calibracion_sensores/calibracion_sensores.ino` en Arduino
+   IDE, instala las librerías enumeradas en su cabecera, selecciona la placa
+   ESP32 y el puerto correctos, y súbelo.
+2. Abre el monitor serie a **115200 baudios** y completa el procedimiento
+   interactivo indicado por el sketch: tras el calentamiento envía `VACIO` con
+   el aula ventilada, `OCUPADO` con una ocupación representativa, `CO_LIMPIO`
+   en aire limpio, revisa `RESUMEN` y confirma con `GUARDAR`. No continúes hasta
+   que informe una calibración válida: el perfil queda guardado en NVS
+   (`Preferences`, namespace `ccs-cal`) de esa misma placa.
+3. Sin borrar la flash ni la NVS, abre
+   `hardware/firmware/prediccion_ventilador/prediccion_ventilador.ino`, configura
+   las constantes de red y MQTT descritas en su cabecera, instala sus
+   dependencias y súbelo en la misma placa.
+4. Verifica en el monitor serie que el perfil fue aceptado y en el dashboard que
+   llegan telemetría y estado. Si falta la calibración, MQTT se desconecta o una
+   orden remota expira, el nodo permanece o vuelve al control local seguro.
+
+`prediccion_ventilador.ino` es el cliente operativo del control predictivo: lee
+sensores, aplica seguridad y fallback, y recibe órdenes temporales. El modelo de
+Deep Learning se ejecuta en el backend, no dentro del ESP32.
+
+### Mapa de archivos del flujo
+
+```text
+frontend/src/
+├── App.tsx                         rutas /, /aulas y /aulas/:id
+├── components/Layout.tsx           drawer/rail y navegación persistente
+└── views/
+    ├── Summary.tsx                 resumen global
+    ├── Rooms.tsx                   inventario y comparación de aulas
+    └── RoomDetail.tsx              especificaciones, operación e historial
+
+hardware/firmware/
+├── calibracion_sensores/
+│   └── calibracion_sensores.ino     commissioning y perfil persistido
+├── prediccion_ventilador/
+│   └── prediccion_ventilador.ino    nodo operativo y cliente predictivo
+└── src/sketch.ino                    simulación Wokwi existente
+```
+
 ## Producción en GCP
 
 La VM documentada es ccs-iot-vm; el dominio es https://calienfriito-utec.duckdns.org.
@@ -135,7 +206,7 @@ del enchufe debe hacerse después de completar las credenciales.
 
 - El calefactor existe en software, pero el montaje físico validado se concentra en el ventilador.
 - MQ-135 es un proxy de CO₂/ocupación; su conversión lineal no es una medición NDIR calibrada.
-- La integración de ESP32-CAM, el tópico MQTT y la fusión del backend están implementados. El repositorio todavía no contiene un modelo de detección entrenado/exportado para enlazar en `detectPeople()`; hasta entonces la cámara no produce un conteo válido y el predictor conserva el fallback por CO₂.
+- La ESP32-CAM clásica cuenta cruces mediante movimiento frente a un fondo adaptativo; requiere una puerta fija y paso individual. No distingue una persona de otra cosa que se mueva, ni ha sido calibrada aún con el hardware real. El conteo inicia en cero al arrancar salvo que se configure `INITIAL_PEOPLE_COUNT`; sin cámara disponible, el predictor conserva el fallback por CO₂.
 - Chronos-Bolt está integrado para pronóstico/comparación; no gobierna siempre el nodo. Solo learning envía órdenes temporales.
 - TLS corresponde al overlay GCP y al firmware físico generado; Wokwi/local usa MQTT sin TLS en 1883.
 - hardware/gateway y los diagramas del informe anterior son antecedentes, no la ruta principal de docker compose.

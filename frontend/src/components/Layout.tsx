@@ -3,7 +3,7 @@ import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom'
 import {
   LayoutDashboard, FlaskConical, DoorOpen,
   Users, LogOut, TrendingUp,
-  AlertTriangle, X, ShieldAlert, Menu, PanelLeftClose, PanelLeftOpen,
+  AlertTriangle, X, ShieldAlert, Menu, ChevronLeft, ChevronRight,
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import { useEmergency } from '../context/EmergencyContext'
@@ -50,6 +50,21 @@ export default function Layout() {
   useEffect(() => {
     try { localStorage.setItem('ccs-sidebar-folded', folded ? '1' : '0') } catch { /* private mode */ }
   }, [folded])
+
+  // Navigation rail shortcut. Ignore editable controls so Cmd/Ctrl+B keeps its
+  // expected text-editing behaviour while a form field has focus.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null
+      const editing = target?.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target?.tagName ?? '')
+      if (!editing && (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'b') {
+        event.preventDefault()
+        setFolded(value => !value)
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [])
 
   function handleLogout() {
     logout()
@@ -255,60 +270,64 @@ export default function Layout() {
 
       {/* ── Sidebar — full height: brand, navigation, user ── */}
       <aside
+        id="primary-navigation"
         className={`fixed inset-y-0 left-0 z-40 flex w-64 flex-col border-r border-slate-800 bg-slate-900 transition-[transform,width] duration-200 ease-out lg:translate-x-0 ${
-          folded ? 'lg:w-16' : 'lg:w-56'
+          folded ? 'lg:w-[4.5rem]' : 'lg:w-56'
         } ${mobileNavOpen ? 'translate-x-0' : '-translate-x-full'}`}
       >
-        {/* Brand + fold (desktop) / close (mobile) */}
-        <div className={`flex h-14 shrink-0 items-center border-b border-slate-800 ${folded ? 'lg:justify-center lg:px-0' : ''} gap-2.5 px-4`}>
-          <Logo size={22} />
-          <span className={`flex-1 text-sm font-semibold text-white ${folded ? 'lg:hidden' : ''}`}>Calienfriito</span>
-          <button
-            onClick={() => setFolded(f => !f)}
-            className={`hidden rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-slate-800 hover:text-slate-100 lg:block ${folded ? 'lg:hidden' : ''}`}
-            aria-label="Plegar menú" title="Plegar menú"
-          >
-            <PanelLeftClose size={16} />
-          </button>
+        {/* One persistent desktop control occupies the same header slot in both states. */}
+        <div className={`flex h-14 shrink-0 items-center border-b border-slate-800 gap-2 px-2 ${folded ? 'lg:justify-center' : ''}`}>
+          <div className={`flex min-w-0 flex-1 items-center gap-2.5 px-2 ${folded ? 'lg:hidden' : ''}`}>
+            <Logo size={22} />
+            <span className="truncate text-sm font-semibold text-white">Calienfriito</span>
+          </div>
+          <div className="group relative hidden lg:block">
+            <button
+              type="button"
+              onClick={() => setFolded(value => !value)}
+              className="flex h-10 w-10 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-800 hover:text-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+              aria-label={folded ? 'Expandir navegación' : 'Contraer navegación'}
+              aria-expanded={!folded}
+              aria-controls="primary-navigation"
+            >
+              {folded ? <ChevronRight size={20} /> : <ChevronLeft size={20} />}
+            </button>
+            <span role="tooltip" className="pointer-events-none absolute left-full top-1/2 z-50 ml-2 hidden -translate-y-1/2 whitespace-nowrap rounded-md border border-slate-700 bg-slate-950 px-2.5 py-1.5 text-xs text-slate-200 shadow-xl group-hover:block group-focus-within:block">
+              {folded ? 'Expandir navegación' : 'Contraer navegación'} · Ctrl/Cmd+B
+            </span>
+          </div>
           <button
             onClick={() => setMobileNavOpen(false)}
-            className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-slate-700 hover:text-slate-100 lg:hidden"
+            className="flex h-10 w-10 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-700 hover:text-slate-100 lg:hidden"
             aria-label="Cerrar menú"
           >
             <X size={18} />
           </button>
         </div>
-        {folded && (
-          <button
-            onClick={() => setFolded(false)}
-            className="mx-auto mt-3 hidden rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-slate-800 hover:text-slate-100 lg:block"
-            aria-label="Mostrar menú" title="Mostrar menú"
-          >
-            <PanelLeftOpen size={16} />
-          </button>
-        )}
 
-        <nav className={`flex-1 space-y-4 overflow-y-auto py-4 ${folded ? 'lg:px-2' : ''} px-3`}>
+        <nav aria-label="Navegación principal" className={`flex-1 space-y-4 overflow-y-auto py-4 ${folded ? 'lg:px-2' : ''} px-3`}>
           {visible.map(g => (
             <div key={g.group} className="space-y-0.5">
               <p className={`px-3 pb-1 text-xs text-slate-500 ${folded ? 'lg:hidden' : ''}`}>{g.group}</p>
               {g.items.map(item => (
-                <NavLink
-                  key={item.to}
-                  to={item.to}
-                  end={item.to === '/'}
-                  title={folded ? item.label : undefined}
-                  className={({ isActive }) =>
-                    `group flex items-center gap-3 rounded-lg border px-3 py-2 text-sm transition-colors ${folded ? 'lg:justify-center lg:px-0' : ''} ${
-                      isActive || (item.to === '/aulas' && location.pathname.startsWith('/room/'))
-                        ? 'border-transparent bg-slate-800 text-white'
-                        : 'border-transparent text-slate-400 hover:bg-slate-800/60 hover:text-white'
-                    }`
-                  }
-                >
-                  {item.icon}
-                  <span className={`flex-1 ${folded ? 'lg:hidden' : ''}`}>{item.label}</span>
-                </NavLink>
+                <div key={item.to} className="group relative">
+                  <NavLink
+                    to={item.to}
+                    end={item.to === '/'}
+                    aria-label={folded ? item.label : undefined}
+                    className={({ isActive }) =>
+                      `relative flex min-h-10 items-center gap-3 rounded-lg border px-3 py-2 text-sm transition-colors ${folded ? 'lg:justify-center lg:px-0' : ''} ${
+                        isActive
+                          ? 'border-transparent bg-slate-800 text-white before:absolute before:inset-y-2 before:left-0 before:w-0.5 before:rounded-full before:bg-blue-400'
+                          : 'border-transparent text-slate-400 hover:bg-slate-800/60 hover:text-white'
+                      }`
+                    }
+                  >
+                    {item.icon}
+                    <span className={`flex-1 ${folded ? 'lg:hidden' : ''}`}>{item.label}</span>
+                  </NavLink>
+                  {folded && <span role="tooltip" className="pointer-events-none absolute left-full top-1/2 z-50 ml-2 hidden -translate-y-1/2 whitespace-nowrap rounded-md border border-slate-700 bg-slate-950 px-2.5 py-1.5 text-xs text-slate-200 shadow-xl lg:group-hover:block lg:group-focus-within:block">{item.label}</span>}
+                </div>
               ))}
             </div>
           ))}
@@ -337,7 +356,7 @@ export default function Layout() {
       </aside>
 
       {/* ── Main content — offset by the sidebar width ── */}
-      <main className={`h-dvh overflow-y-auto p-4 pt-16 transition-[margin] duration-200 sm:p-6 sm:pt-16 lg:pt-6 ${folded ? 'lg:ml-16' : 'lg:ml-56'}`}>
+      <main className={`h-dvh overflow-y-auto p-4 pt-16 transition-[margin] duration-200 sm:p-6 sm:pt-16 lg:pt-6 ${folded ? 'lg:ml-[4.5rem]' : 'lg:ml-56'}`}>
         <Outlet />
       </main>
 

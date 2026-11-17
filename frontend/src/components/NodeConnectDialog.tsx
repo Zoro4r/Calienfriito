@@ -29,7 +29,7 @@ export default function NodeConnectDialog({ room, onClose }: { room: Room; onClo
       onClose={onClose}
       footer={<>
         <span className="flex-1" />
-        {link.online && <Link to={`/room/${room.id}`} className="btn btn-secondary">Ver aula</Link>}
+        {link.online && <Link to={`/aulas/${encodeURIComponent(room.id)}`} className="btn btn-secondary">Abrir detalle</Link>}
         <button className="btn btn-primary" onClick={onClose}>{link.online ? 'Listo' : 'Cerrar'}</button>
       </>}
     >

@@ -147,7 +147,7 @@ export default function Summary() {
       <div className="grid shrink-0 grid-cols-2 gap-3 xl:grid-cols-4">
         <Stat label="En alerta" value={counts.alert ?? 0} sub={(counts.alert ?? 0) === 1 ? 'aula' : 'aulas'} dot="bg-red-400" to="/aulas?estado=alert" />
         <Stat label="En atención" value={counts.warn ?? 0} sub={(counts.warn ?? 0) === 1 ? 'aula' : 'aulas'} dot="bg-amber-400" to="/aulas?estado=warn" />
-        <Stat label="En clase ahora" value={blocks ? inClassNow : '—'} sub={`de ${rooms.length}`} dot="bg-sky-400" to="/aulas?vista=horarios" />
+        <Stat label="En clase ahora" value={blocks ? inClassNow : '—'} sub={`de ${rooms.length}`} dot="bg-sky-400" to="/aulas" />
         <Stat label="Reportando ahora" value={fresh} sub={`de ${rooms.length}`} dot={fresh === rooms.length ? 'bg-emerald-400' : 'bg-slate-500'} to={fresh < rooms.length ? '/aulas?estado=nodata' : '/aulas'} />
       </div>
 
@@ -161,7 +161,7 @@ export default function Summary() {
                 const st = stateOf(r)
                 const c = classOf(r.room.id)
                 return (
-                  <Link key={r.room.id} to={`/room/${r.room.id}`} className="grid grid-cols-[4rem_minmax(0,1fr)_auto] items-center gap-3 border-b border-slate-800 px-4 py-2.5 hover:bg-slate-800/30">
+                  <Link key={r.room.id} to={`/aulas/${encodeURIComponent(r.room.id)}`} className="grid grid-cols-[4rem_minmax(0,1fr)_auto] items-center gap-3 border-b border-slate-800 px-4 py-2.5 hover:bg-slate-800/30">
                     <span className="text-sm font-semibold text-white">{r.room.id}</span>
                     <span className="min-w-0">
                       <span className="flex items-center gap-1.5 text-sm text-slate-100"><span className={`h-1.5 w-1.5 rounded-full ${DOT[st.tone]}`} />{st.label}</span>

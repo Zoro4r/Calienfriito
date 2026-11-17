@@ -7,6 +7,8 @@ Lee DHT22, MQ-135 y MQ-7, decide **en el propio nodo** qué hacer con el ventila
 | Archivo | Qué es |
 |---|---|
 | [`src/sketch.ino`](src/sketch.ino) | Firmware: sensores, heurística, alarma de CO, log serial y telemetría MQTT |
+| [`calibracion_sensores/calibracion_sensores.ino`](calibracion_sensores/calibracion_sensores.ino) | Commissioning: estabiliza, caracteriza y guarda el perfil de sensores en NVS |
+| [`prediccion_ventilador/prediccion_ventilador.ino`](prediccion_ventilador/prediccion_ventilador.ino) | Cliente operativo: publica variables calibradas y aplica órdenes temporales del modelo del backend con fallback local |
 | [`diagram.json`](diagram.json) | Circuito de Wokwi |
 | [`wokwi.toml`](wokwi.toml) | Firmware a simular y puerto serial RFC2217 (4000) |
 | [`platformio.ini`](platformio.ini) | Placa `esp32dev`, framework Arduino y librerías |
@@ -20,10 +22,15 @@ Ese programa captura frames en una AI-Thinker ESP32-CAM y publica:
 {"people_count": 8, "confidence": 0.91, "ts": 123456}
 ```
 
-en `ccs/<aula>/occupancy`. El transporte MQTT y la captura están preparados, pero el
-adaptador `detectPeople()` debe enlazarse con el modelo ESP-WHO/TFLite exportado para
-la placa. Mientras no se enlace, no se publica un conteo válido y el backend sigue
-usando el proxy de CO₂.
+en `ccs/<aula>/occupancy`. La AI-Thinker ESP32-CAM ejecuta un modelo ligero de
+fondo adaptativo sobre frames QQVGA y cuenta el cruce de un objeto en movimiento
+por una línea virtual. Ajusta `ENTRY_LEFT_TO_RIGHT` según la orientación y
+`INITIAL_PEOPLE_COUNT` si el aula no empieza vacía. El conteo se reinicia con la
+placa y está pensado para una puerta fija con paso individual. Movimiento de la
+puerta, sombras o dos personas juntas pueden producir errores: no es un detector
+neuronal de personas. El ESP32-CAM-MB sirve para programar y alimentar la cámara;
+no ejecuta el procesamiento. El campo `confidence=0.600` es una marca operativa
+para que el backend acepte el conteo; no representa una probabilidad calibrada.
 
 > El hardware real también usa DHT22: con un DHT11 (±2 °C, resolución 1 °C) la banda de ±0.5 °C
 > no se puede distinguir. Sí hay que reemplazar las conversiones simuladas del
@@ -41,6 +48,41 @@ Ahí debe estar corriendo Mosquitto (`docker compose up`) o el broker liviano (`
 
 > ⚠️ **Wokwi pausa la simulación cuando VS Code no está a la vista.** Abre el monitor del nodo dentro de
 > VS Code (*Simple Browser*) junto al simulador; si no, el nodo se congela y aparece *offline*.
+
+## Commissioning en dos etapas
+
+El modelo Deep Learning no se ejecuta en el ESP32: se ejecuta en el backend. El
+nodo operativo envía telemetría calibrada, recibe una decisión con vencimiento y
+vuelve a las reglas locales cuando la orden vence o MQTT deja de estar disponible.
+
+Cada sketch tiene su propio `platformio.ini`. Conecta el ESP32 y ejecuta, en este
+orden (reemplaza `COM5` por el puerto real):
+
+```powershell
+pio run -d hardware/firmware/calibracion_sensores -t upload --upload-port COM5
+pio device monitor --port COM5 --baud 115200
+```
+
+En el monitor serie espera la estabilización y envía `VACIO`, `OCUPADO`,
+`CO_LIMPIO`, `RESUMEN` y `GUARDAR`. La calibración queda en el namespace NVS
+`ccs-cal`; cargar el segundo sketch no borra esa partición.
+
+Configura red, broker y aula en la cabecera del sketch operativo y cárgalo:
+
+```powershell
+pio run -d hardware/firmware/prediccion_ventilador -t upload --upload-port COM5
+pio device monitor --port COM5 --baud 115200
+```
+
+Para validar ambos binarios sin una placa conectada:
+
+```powershell
+pio run -d hardware/firmware/calibracion_sensores
+pio run -d hardware/firmware/prediccion_ventilador
+```
+
+Dependencias: `DHT sensor library`, `Adafruit Unified Sensor` y, para el sketch
+operativo, `PubSubClient`. `WiFi` y `Preferences` son parte de Arduino-ESP32.
 
 ## Escenarios para probar
 

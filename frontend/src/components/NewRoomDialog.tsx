@@ -53,7 +53,7 @@ export default function NewRoomDialog({ onClose, onCreated }: { onClose: () => v
         </button>
       </> : <>
         <span className="flex-1" />
-        <Link to={`/room/${roomId}`} className="btn btn-secondary">Ver aula</Link>
+        <Link to={`/aulas/${encodeURIComponent(roomId)}`} className="btn btn-secondary">Abrir detalle</Link>
         <button className="btn btn-primary" onClick={onClose}>Listo</button>
       </>}
     >

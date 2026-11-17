@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
-import { useParams, Link, useSearchParams } from 'react-router-dom'
+import { useParams, Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { ArrowLeft, RefreshCw, AlertTriangle } from 'lucide-react'
 import api, { getApiErrorDetail } from '../api/client'
 import { useAuth } from '../context/AuthContext'
@@ -8,6 +8,7 @@ import Strategies from '../components/Strategies'
 import RoomHistory from '../components/RoomHistory'
 import NodeRules from '../components/NodeRules'
 import NodeControl from '../components/NodeControl'
+import RoomInfra from '../components/RoomInfra'
 import {
   NodeStatusCard, FW, LiveChart, Panel, SensorCard, stateKey, niceAxis,
   coBand, humBand, occBand, occupiedAt, tempBand, type Point,
@@ -15,8 +16,8 @@ import {
 import { useNodes } from '../hooks/useNodes'
 import { levelTemp, levelCO2, levelCO, getStatusLabel } from '../utils/sensorColors'
 import {
-  Card, Chip, Tabs, StatusText, LEVEL_TONE, AI_STATE, MODEL_LABEL, LIVE_SECONDS, NODE_SETPOINT,
-  fmt, parseUtc, timeAgo, type Tone,
+  Card, Chip, Tabs, Toast, StatusText, LEVEL_TONE, AI_STATE, MODEL_LABEL, LIVE_SECONDS, NODE_SETPOINT,
+  fmt, parseUtc, timeAgo, useToast, type Tone,
 } from '../components/ui'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -30,6 +31,9 @@ interface RoomInfo {
   floor?: number | null
   fan_type?: 'pwm_12v' | 'smart_plug'
   fan_power_w?: number | null
+  area_m2?: number | null
+  ceiling_height_m?: number | null
+  volume_m3?: number | null
 }
 
 interface SensorDevice {
@@ -40,7 +44,7 @@ interface SensorDevice {
   _updating?: boolean
 }
 
-export type Tab = 'vivo' | 'estrategias' | 'control' | 'historial' | 'config'
+export type Tab = 'vivo' | 'estrategias' | 'control' | 'historial' | 'config' | 'hardware'
 
 interface WeeklySlot { day_of_week: number; start_time: string; end_time: string; expected_people: number }
 interface RoomReservation { id: number; room_id: string; username?: string; start_time: string; end_time: string; expected_occupancy: number }
@@ -84,17 +88,19 @@ function Toggle({ checked, onChange, disabled, label }: {
 }
 
 // ── View ──────────────────────────────────────────────────────────────────────
-// Full page at /room/:id, or embedded in Aulas (roomId + embeddedTab): then Aulas draws the
-// tabs and this view renders only the chosen tab, under a compact room header.
-export default function RoomDetail({ roomId, embeddedTab }: { roomId?: string; embeddedTab?: Tab } = {}) {
-  const params_ = useParams<{ id: string }>()
-  const id = roomId ?? params_.id
-  const embedded = !!embeddedTab
+// Exclusive room workspace at /aulas/:id. The inventory never embeds this view.
+export default function RoomDetail() {
+  const { id } = useParams<{ id: string }>()
+  const navigate = useNavigate()
   const { user } = useAuth()
   const isGuest = user?.role === 'guest'
+  const isAdmin = user?.role === 'admin'
   const [params, setParams] = useSearchParams()
-  const tab = embeddedTab ?? ((params.get('tab') as Tab) || 'vivo')
+  const requestedTab = params.get('tab') as Tab | null
+  const tab: Tab = requestedTab && ['vivo', 'estrategias', 'control', 'historial', 'config', 'hardware'].includes(requestedTab)
+    ? requestedTab : 'vivo'
   const setTab = (t: Tab) => setParams(t === 'vivo' ? {} : { tab: t }, { replace: true })
+  const { toast, notify, clear } = useToast()
 
   const [room, setRoom] = useState<RoomInfo | null>(null)
   const [readings, setReadings] = useState<StoredReading[]>([])
@@ -278,19 +284,13 @@ export default function RoomDetail({ roomId, embeddedTab }: { roomId?: string; e
   )
 
   return (
-    <div className={embedded
-      ? 'flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-5'
-      : `flex flex-col gap-4 ${tab === 'vivo' || tab === 'historial' || tab === 'estrategias' || tab === 'control' || (tab === 'config' && hasNode) ? 'lg:h-full lg:min-h-0' : ''}`}>
+    <div className={`flex flex-col gap-4 ${tab === 'vivo' || tab === 'historial' || tab === 'estrategias' || tab === 'control' || tab === 'hardware' || (tab === 'config' && hasNode) ? 'lg:h-full lg:min-h-0' : ''}`}>
       {/* ── Context header ── */}
       <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2">
-        {!embedded && (
-          <Link to="/aulas" className="btn btn-ghost px-2" aria-label="Volver a las aulas">
-            <ArrowLeft size={18} />
-          </Link>
-        )}
-        {embedded
-          ? <h2 className="text-xl font-semibold text-white">{room?.id} <span className="text-sm font-normal text-slate-400">{name}</span></h2>
-          : <h1 className="page-title">{room?.id} <span className="text-sm font-normal text-slate-400">{name}</span></h1>}
+        <Link to="/aulas" className="btn btn-ghost px-2" aria-label="Volver a las aulas">
+          <ArrowLeft size={18} />
+        </Link>
+        <h1 className="page-title">{room?.id} <span className="text-sm font-normal text-slate-400">{name}</span></h1>
         <div className="flex flex-wrap items-center gap-2">
           {latest
             ? <Chip tone={live ? 'ok' : 'muted'} dot pulse={live}>{live ? 'En vivo' : `Última lectura ${timeAgo(latest.timestamp, now)}`}</Chip>
@@ -318,20 +318,17 @@ export default function RoomDetail({ roomId, embeddedTab }: { roomId?: string; e
         </Card>
       )}
 
-      {!embedded && <Tabs<Tab>
+      <Tabs<Tab>
         value={tab}
         onChange={setTab}
         items={[
           { value: 'vivo', label: 'En vivo' },
-          ...(hasNode ? [{ value: 'estrategias' as Tab, label: 'Aprendizaje' }, { value: 'control' as Tab, label: 'Control' }] : []),
+          ...(hasNode ? [{ value: 'estrategias' as Tab, label: 'Automatización' }, { value: 'control' as Tab, label: 'Control' }] : []),
           { value: 'historial', label: 'Historial' },
           { value: 'config', label: 'Configuración' },
+          ...(isAdmin ? [{ value: 'hardware' as Tab, label: 'Hardware' }] : []),
         ]}
-      />}
-
-      {embedded && !hasNode && !loading && (tab === 'estrategias' || tab === 'control') && (
-        <Card><p className="py-8 text-center text-sm text-slate-400">Esta aula no tiene nodo: {tab === 'control' ? 'no hay actuadores que controlar' : 'no hay estrategias que comparar'}. Conéctalo desde Infraestructura.</p></Card>
-      )}
+      />
 
       {/* ── En vivo: the node monitor (/monitor/), in the dashboard's style ── */}
       {tab === 'vivo' && (!latest && !hasNode ? (
@@ -371,7 +368,7 @@ export default function RoomDetail({ roomId, embeddedTab }: { roomId?: string; e
             </div>}
 
           {/* Row 2 · history: window + one chart per magnitude. Not in Aulas: Mediciones already charts the last hour. */}
-          {!embedded && <>
+          <>
           <div className="flex shrink-0 flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-3">
               <h2 className="section-title">Histórico</h2>
@@ -405,7 +402,7 @@ export default function RoomDetail({ roomId, embeddedTab }: { roomId?: string; e
                   axis={niceAxis(live_.points.map(p => p.co2 ?? 0), [400, 1600], 400)}
                   refs={[{ y: 800, label: 'atención', color: '#fbbf24' }]} />}
           </div>
-          </>}
+          </>
 
         </div>
       ))}
@@ -421,6 +418,17 @@ export default function RoomDetail({ roomId, embeddedTab }: { roomId?: string; e
       {/* ── Historial ── */}
       {tab === 'historial' && id && <RoomHistory roomId={id} />}
 
+      {tab === 'hardware' && isAdmin && room && (
+        <div className="surface min-h-0 flex-1 overflow-y-auto">
+          <RoomInfra
+            room={room}
+            notify={notify}
+            onRenamed={newId => navigate(`/aulas/${encodeURIComponent(newId)}?tab=hardware`, { replace: true })}
+            onDeleted={() => navigate('/aulas', { replace: true })}
+          />
+        </div>
+      )}
+
       {/* ── Configuración ── */}
       {tab === 'config' && <>
         {isGuest && <p className="text-xs text-amber-300">Solo lectura: tu rol no puede cambiar la configuración.</p>}
@@ -430,7 +438,7 @@ export default function RoomDetail({ roomId, embeddedTab }: { roomId?: string; e
         {/* Where expected occupancy comes from: weekly classes + one-off reservations */}
         {!hasNode && <Card
           title="Horario de clases"
-          aside={<Link to={`/aulas?aula=${encodeURIComponent(id ?? '')}&vista=horarios`} className="text-blue-300 hover:underline">Ver horarios</Link>}
+          aside={<span className="text-slate-500">Especificaciones e historial de ocupación</span>}
         >
           <p className="mb-3 text-xs text-slate-400">
             {hasNode
@@ -501,6 +509,7 @@ export default function RoomDetail({ roomId, embeddedTab }: { roomId?: string; e
           ? <NodeRules roomId={id} sensorId={devices[0]?.sensor_id} />
           : <Card title="Sensores del aula">{devicesList}</Card>}
       </>}
+      <Toast toast={toast} onClose={clear} />
     </div>
   )
 }

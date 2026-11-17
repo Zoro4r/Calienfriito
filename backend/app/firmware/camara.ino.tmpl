@@ -1,10 +1,9 @@
 // ESP32-CAM AI-Thinker · nodo __AULA__ · generado por "Conectar nodo".
 // Publica ocupación visual en ccs/<aula>/occupancy.
 //
-// IMPORTANTE: este archivo implementa el transporte, captura y contrato MQTT.
-// El detector de personas se enlaza en detectPeople() con el modelo ESP-WHO/TFLite
-// exportado para la placa. Mientras no se enlace ese modelo, no se publica un conteo
-// válido (confidence=0), por lo que el backend conserva la ocupación por CO₂.
+// Procesa los frames en la placa con un modelo de fondo adaptativo y cuenta
+// cruces de una linea virtual. Requiere camara fija, una puerta y paso individual.
+// No es reconocimiento facial ni un clasificador neuronal de personas.
 
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
@@ -45,16 +44,104 @@ PubSubClient mqtt(tls);
 String topicOccupancy = String("ccs/") + AULA + "/occupancy";
 unsigned long lastPublish = 0;
 
-// Replace this weak adapter with the generated ESP-WHO/TFLite model adapter.
-// It must return the number of people and write a confidence in [0,1].
-__attribute__((weak)) int detectPeople(camera_fb_t *frame, float *confidence) {
-  (void)frame;
-  *confidence = 0.0f;
-  return -1;
+// Modelo de fondo adaptativo para una puerta: izquierda -> derecha = entrada.
+// Cambiar ENTRY_LEFT_TO_RIGHT si la camara mira desde el lado contrario.
+// Arrancar con el aula vacia o ajustar INITIAL_PEOPLE_COUNT.
+const bool ENTRY_LEFT_TO_RIGHT = true;
+const int INITIAL_PEOPLE_COUNT = 0;
+const int GW = 40, GH = 30, CELLS = GW * GH;
+const int CHANGE_THRESHOLD = 22, MIN_BLOB = 18;
+uint16_t backgroundQ4[CELLS] = {};
+uint8_t moving[CELLS] = {};
+uint16_t queueCells[CELLS] = {};
+bool backgroundReady = false;
+int peopleCount = INITIAL_PEOPLE_COUNT;
+int trackX = -1, trackY = -1, startSide = 0, trackFrames = 0;
+bool crossed = false;
+unsigned long lastCapture = 0, lastSeen = 0;
+
+int sideOf(int x) {
+  if (x <= 16) return -1;
+  if (x >= 23) return 1;
+  return 0;
+}
+
+void resetTrack() {
+  trackX = -1;
+  trackY = -1;
+  startSide = 0;
+  trackFrames = 0;
+  crossed = false;
+}
+
+// Reduce QQVGA RGB565 de 160x120 a 40x30, aprende el fondo y busca el
+// componente conexo mas grande. Los buffers estaticos ocupan unos 6 KiB.
+bool detectMovingBlob(camera_fb_t *frame, int *cx, int *cy, int *area) {
+  if (!frame || frame->format != PIXFORMAT_RGB565 || frame->width != 160 ||
+      frame->height != 120 || frame->len < 160 * 120 * 2) return false;
+  for (int y = 0; y < GH; ++y) {
+    for (int x = 0; x < GW; ++x) {
+      int sum = 0;
+      for (int dy = 0; dy < 4; ++dy) {
+        const uint8_t *row = frame->buf + ((y * 4 + dy) * 160 + x * 4) * 2;
+        for (int dx = 0; dx < 4; ++dx)
+          sum += (int(row[dx * 2]) + int(row[dx * 2 + 1])) / 2;
+      }
+      int i = y * GW + x;
+      int sample = (sum / 16) * 16;
+      if (!backgroundReady) backgroundQ4[i] = sample;
+      int difference = abs(sample - int(backgroundQ4[i])) / 16;
+      bool inside = x >= 3 && x <= 36 && y >= 2 && y <= 27;
+      moving[i] = backgroundReady && inside && difference >= CHANGE_THRESHOLD;
+      int divisor = moving[i] ? 256 : 32;
+      backgroundQ4[i] += (sample - int(backgroundQ4[i])) / divisor;
+    }
+  }
+  if (!backgroundReady) { backgroundReady = true; return false; }
+
+  int bestArea = 0, bestX = 0, bestY = 0;
+  for (int seed = 0; seed < CELLS; ++seed) {
+    if (moving[seed] != 1) continue;
+    int head = 0, tail = 0, sumX = 0, sumY = 0;
+    queueCells[tail++] = seed;
+    moving[seed] = 2;
+    while (head < tail) {
+      int pos = queueCells[head++], x = pos % GW, y = pos / GW;
+      sumX += x; sumY += y;
+      const int nx[4] = {x - 1, x + 1, x, x};
+      const int ny[4] = {y, y, y - 1, y + 1};
+      for (int k = 0; k < 4; ++k) {
+        if (nx[k] < 0 || nx[k] >= GW || ny[k] < 0 || ny[k] >= GH) continue;
+        int next = ny[k] * GW + nx[k];
+        if (moving[next] == 1) { moving[next] = 2; queueCells[tail++] = next; }
+      }
+    }
+    if (tail > bestArea) {
+      bestArea = tail; bestX = sumX / tail; bestY = sumY / tail;
+    }
+  }
+  if (bestArea < MIN_BLOB) return false;
+  *cx = bestX; *cy = bestY; *area = bestArea;
+  return true;
+}
+
+void updateCount(int x, int y, int area, unsigned long now) {
+  if (trackX < 0 || now - lastSeen > 1200 ||
+      abs(x - trackX) > 12 || abs(y - trackY) > 10) resetTrack();
+  trackX = x; trackY = y; lastSeen = now;
+  ++trackFrames;
+  int side = sideOf(x);
+  if (trackFrames >= 2 && startSide == 0 && side != 0) startSide = side;
+  if (!crossed && trackFrames >= 3 && startSide != 0 && side == -startSide) {
+    bool entering = (startSide == -1) == ENTRY_LEFT_TO_RIGHT;
+    peopleCount = max(0, peopleCount + (entering ? 1 : -1));
+    crossed = true;
+    Serial.printf("%s; aforo=%d; area=%d\n", entering ? "entrada" : "salida", peopleCount, area);
+  }
 }
 
 void setupCamera() {
-  camera_config_t c;
+  camera_config_t c = {};
   c.ledc_channel = LEDC_CHANNEL_0;
   c.ledc_timer = LEDC_TIMER_0;
   c.pin_d0 = Y2_GPIO_NUM; c.pin_d1 = Y3_GPIO_NUM; c.pin_d2 = Y4_GPIO_NUM;
@@ -97,21 +184,24 @@ void setup() {
 void loop() {
   if (!mqtt.connected()) connectMqtt();
   mqtt.loop();
-  if (millis() - lastPublish < 2000) return;
-  lastPublish = millis();
-
-  camera_fb_t *frame = esp_camera_fb_get();
-  if (!frame) return;
-  float confidence = 0.0f;
-  int count = detectPeople(frame, &confidence);
-  esp_camera_fb_return(frame);
-  if (count < 0 || confidence < 0.50f) {
-    Serial.println("occupancy model unavailable/low confidence; no valid count published");
-    return;
+  unsigned long now = millis();
+  if (now - lastCapture >= 300) {
+    lastCapture = now;
+    camera_fb_t *frame = esp_camera_fb_get();
+    if (frame) {
+      int x, y, area;
+      bool found = detectMovingBlob(frame, &x, &y, &area);
+      esp_camera_fb_return(frame);
+      if (found) updateCount(x, y, area, now);
+      else if (now - lastSeen > 1200) resetTrack();
+    }
   }
+  if (!backgroundReady || now - lastPublish < 2000) return;
+  lastPublish = now;
   char payload[160];
+  // Calidad operativa fija; no es la probabilidad de una red neuronal.
   snprintf(payload, sizeof(payload),
-           "{\"people_count\":%d,\"confidence\":%.3f,\"ts\":%lu}",
-           count, confidence, millis());
+           "{\"people_count\":%d,\"confidence\":0.600,\"ts\":%lu}",
+           peopleCount, now);
   mqtt.publish(topicOccupancy.c_str(), payload, false);
 }

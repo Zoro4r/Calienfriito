@@ -164,15 +164,15 @@ export function NodeSetup({ roomId }: { roomId: string }) {
           <input className="field" type="password" value={mqttPass} onChange={e => setMqttPass(e.target.value)} placeholder="usuario nodo" autoComplete="new-password" /></label>
       </div>
       <span className="flex flex-wrap items-center gap-2">
-        <button type="button" className="btn btn-secondary" onClick={download} disabled={!ready}><Download size={14} /> Descargar nodo.ino</button>
+        <button type="button" className="btn btn-secondary" onClick={download} disabled={!ready}><Download size={14} /> Descargar {nodeKind === 'camera' ? 'camara.ino' : 'nodo.ino'}</button>
         <button type="button" className="btn btn-ghost" onClick={copy} disabled={!ready}>{copied ? <><Check size={14} /> Copiado</> : <><Copy size={14} /> Copiar</>}</button>
         <span className="text-xs text-slate-500">Las claves solo se escriben en el archivo; no se envían.</span>
       </span>
       <ol className="list-decimal space-y-1 pl-5 marker:text-slate-500">
         {nodeKind === 'camera' ? <>
-          <li>Ábrelo en el <b className={b}>Arduino IDE</b>, placa <b className={b}>AI Thinker ESP32-CAM</b>. Instala `esp32-camera`, `PubSubClient` y enlaza el adaptador del modelo ESP-WHO/TFLite.</li>
+          <li>Ábrelo en el <b className={b}>Arduino IDE</b>, placa <b className={b}>AI Thinker ESP32-CAM</b>. Instala PubSubClient. El conteo por cruce se ejecuta en la placa; monta la cámara fija sobre una puerta y ajusta ENTRY_LEFT_TO_RIGHT en el archivo.</li>
           <li>Conecta el programador MB/USB-TTL, mantén <b className={b}>GPIO0</b> a GND durante la carga y retíralo al reiniciar.</li>
-          <li>El backend acepta el conteo cuando llega con confianza ≥ 0,50; sin modelo enlazado conserva la estimación por CO₂.</li>
+          <li>Enciéndela con el aula vacía o ajusta INITIAL_PEOPLE_COUNT. El conteo se reinicia al arrancar y requiere paso de una persona a la vez.</li>
         </> : <>
           <li>Ábrelo en el <b className={b}>Arduino IDE</b>, placa <b className={b}>ESP32 Dev Module</b>. Librerías: DHT sensor library, PubSubClient{board === 'pcb' ? ' y Adafruit INA219' : ''}.</li>
           <li>Con los 12 V y OUT+ desconectados, conecta el USB y pulsa <b className={b}>Subir</b> (<b className={b}>BOOT</b> si se queda en "Connecting…").</li>

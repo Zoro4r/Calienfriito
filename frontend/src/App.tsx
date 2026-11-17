@@ -1,5 +1,5 @@
 import { lazy, Suspense, type ReactNode } from 'react'
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate, useLocation, useParams } from 'react-router-dom'
 import { useAuth } from './context/AuthContext'
 import { EmergencyProvider } from './context/EmergencyContext'
 import Layout from './components/Layout'
@@ -41,6 +41,12 @@ function AdminRoute({ children }: { children: ReactNode }) {
   return <>{children}</>
 }
 
+function LegacyRoomRedirect() {
+  const { id = '' } = useParams<{ id: string }>()
+  const { search } = useLocation()
+  return <Navigate to={`/aulas/${encodeURIComponent(id)}${search}`} replace />
+}
+
 export default function App() {
   return (
     <BrowserRouter>
@@ -61,12 +67,13 @@ export default function App() {
         >
           <Route index element={<Summary />} />
           <Route path="aulas"        element={<Rooms />} />
+          <Route path="aulas/:id"    element={<RoomDetail />} />
           <Route path="rooms"        element={<Navigate to="/aulas" replace />} />
-          <Route path="room/:id"     element={<RoomDetail />} />
-          <Route path="sensors" element={<Navigate to="/aulas?vista=infraestructura" replace />} />
+          <Route path="room/:id"     element={<LegacyRoomRedirect />} />
+          <Route path="sensors" element={<Navigate to="/aulas" replace />} />
           {/* Read-only timetable: every role may see it. The old path still works. */}
-          <Route path="horarios" element={<Navigate to="/aulas?vista=horarios" replace />} />
-          <Route path="reservations" element={<Navigate to="/aulas?vista=horarios" replace />} />
+          <Route path="horarios" element={<Navigate to="/aulas" replace />} />
+          <Route path="reservations" element={<Navigate to="/aulas" replace />} />
           <Route
             path="admin/users"
             element={
@@ -75,7 +82,7 @@ export default function App() {
               </AdminRoute>
             }
           />
-          <Route path="infrastructure" element={<Navigate to="/aulas?vista=infraestructura" replace />} />
+          <Route path="infrastructure" element={<Navigate to="/aulas" replace />} />
           <Route
             path="admin/simulation"
             element={
