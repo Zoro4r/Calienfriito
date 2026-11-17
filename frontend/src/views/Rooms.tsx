@@ -1,17 +1,18 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ArrowRight, Plus, Plug, RefreshCw } from 'lucide-react'
+import { Activity, ArrowRight, Building2, CalendarDays, Cpu, Plus, Plug, RefreshCw } from 'lucide-react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import api from '../api/client'
 import NewRoomDialog from '../components/NewRoomDialog'
 import NodeConnectDialog from '../components/NodeConnectDialog'
 import { RoomFilters, useRoomFilter } from '../components/RoomFilters'
-import { Toast, fmt, timeAgo, useToast, type Tone } from '../components/ui'
+import { Tabs, Toast, fmt, timeAgo, useToast, type Tone } from '../components/ui'
 import { useAuth } from '../context/AuthContext'
 import { ORDER, STATUS, shortDate, stateOf, useRoomRows, type RoomRow } from '../hooks/useRoomRows'
 import { compareRooms, locationLabel, shortName, type Room } from '../utils/rooms'
 
 interface WeekBlock { room_id: string; day: number; start: string; end: string; people: number }
 type Sort = 'criticality' | 'temperature' | 'recent'
+type PreviewTab = 'readings' | 'context' | 'node' | 'actions'
 
 const DOT: Record<Tone, string> = {
   alert: 'bg-red-400', warn: 'bg-amber-400', high: 'bg-orange-400',
@@ -58,12 +59,22 @@ function strategyLabel(row: RoomRow) {
 function Metrics({ row }: { row: RoomRow }) {
   const latest = row.latest
   if (!latest) return <span className="text-slate-500">Sin lecturas</span>
+  const metrics = [
+    { label: 'Temperatura', value: fmt(latest.temperature), unit: '°C' },
+    { label: 'Humedad', value: fmt(latest.humidity, 0), unit: '%' },
+    { label: 'CO₂', value: fmt(latest.co2_ppm, 0), unit: 'ppm' },
+    { label: 'CO', value: fmt(latest.co_ppm, 0), unit: 'ppm' },
+  ]
   return (
-    <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs tabular-nums text-slate-300 xl:grid-cols-4">
-      <span><span className="text-slate-500">T </span>{fmt(latest.temperature)} °C</span>
-      <span><span className="text-slate-500">HR </span>{fmt(latest.humidity, 0)} %</span>
-      <span><span className="text-slate-500">CO₂ </span>{fmt(latest.co2_ppm, 0)} ppm</span>
-      <span><span className="text-slate-500">CO </span>{fmt(latest.co_ppm, 0)} ppm</span>
+    <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+      {metrics.map(metric => (
+        <div key={metric.label} className="surface-inset rounded-lg border border-slate-800 px-4 py-3">
+          <p className="text-xs text-slate-500">{metric.label}</p>
+          <p className="mt-1 text-xl font-semibold tabular-nums text-white">
+            {metric.value} <span className="text-xs font-normal text-slate-400">{metric.unit}</span>
+          </p>
+        </div>
+      ))}
     </div>
   )
 }
@@ -76,11 +87,13 @@ export default function Rooms() {
   const { rooms, rows, loading, error, now, reloadRooms } = useRoomRows()
   const filter = useRoomFilter(rooms)
   const [sort, setSort] = useState<Sort>('criticality')
+  const [previewTab, setPreviewTab] = useState<PreviewTab>('readings')
   const [blocks, setBlocks] = useState<WeekBlock[] | null>(null)
   const [creating, setCreating] = useState(false)
   const [connecting, setConnecting] = useState<Room | null>(null)
   const { toast, notify, clear } = useToast()
   const status = params.get('estado') ?? ''
+  const selectedId = params.get('aula') ?? ''
 
   useEffect(() => {
     api.get<{ blocks: WeekBlock[] }>('/admin/occupancy/week')
@@ -98,6 +111,14 @@ export default function Rooms() {
   const setStatus = (value: string) => setParams(previous => {
     if (value) previous.set('estado', value)
     else previous.delete('estado')
+    return previous
+  }, { replace: true })
+
+  const selected = list.find(row => row.room.id === selectedId) ?? list[0] ?? null
+  const selectedState = selected ? stateOf(selected) : null
+  const selectedNode = selected ? nodeLabel(selected) : null
+  const selectRoom = (id: string) => setParams(previous => {
+    previous.set('aula', id)
     return previous
   }, { replace: true })
 
@@ -122,37 +143,95 @@ export default function Rooms() {
         </div>
       </section>
 
-      <section className="surface min-h-0 flex-1 overflow-hidden">
+      <section className="min-h-0 flex-1 overflow-hidden">
         {error && <p className="border-b border-red-500/30 bg-red-500/5 px-4 py-3 text-sm text-red-300">{error}</p>}
         {loading && !rows.length ? <p className="flex items-center gap-2 p-6 text-sm text-slate-400"><RefreshCw size={14} className="animate-spin" /> Cargando aulas…</p> : list.length === 0 ? <p className="p-8 text-center text-sm text-slate-500">{rooms.length ? 'Ningún aula coincide con los filtros.' : 'Todavía no hay aulas.'}</p> : (
-          <div className="h-full overflow-auto">
-            <div className="hidden min-w-[960px] md:block">
-              <div className="grid grid-cols-[minmax(12rem,1.25fr)_minmax(18rem,1.8fr)_minmax(11rem,1fr)_minmax(10rem,.9fr)_auto] gap-4 border-b border-slate-800 px-4 py-2 text-xs font-medium uppercase tracking-wide text-slate-500">
-                <span>Aula y estado</span><span>Lecturas actuales</span><span>Contexto</span><span>Nodo y estrategia</span><span className="w-40">Acciones</span>
+          <div className="grid h-full min-h-0 grid-cols-1 gap-4 lg:grid-cols-[17rem_minmax(0,1fr)]">
+            <aside className="surface flex min-h-0 flex-col overflow-hidden" aria-label="Seleccionar aula">
+              <div className="border-b border-slate-800 px-4 py-3">
+                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Aulas</p>
+                <p className="mt-1 text-xs text-slate-400">Selecciona una para consultar su resumen.</p>
               </div>
-              {list.map(row => {
-                const state = stateOf(row); const node = nodeLabel(row)
-                return <article key={row.room.id} className="grid grid-cols-[minmax(12rem,1.25fr)_minmax(18rem,1.8fr)_minmax(11rem,1fr)_minmax(10rem,.9fr)_auto] items-center gap-4 border-b border-slate-800 px-4 py-3 transition-colors hover:bg-slate-800/25">
-                  <div className="min-w-0"><Link to={`/aulas/${encodeURIComponent(row.room.id)}`} className="font-semibold text-white hover:text-blue-300">{row.room.id}{shortName(row.room) && <span className="ml-1.5 font-normal text-slate-400">{shortName(row.room)}</span>}</Link><p className="mt-1 flex items-center gap-1.5 text-xs text-slate-400"><span className={`h-1.5 w-1.5 rounded-full ${DOT[state.tone]}`} />{state.label} · {locationLabel(row.room)}</p></div>
-                  <div><Metrics row={row} /><p className="mt-1 text-[11px] text-slate-500">{row.latest ? (row.fresh ? timeAgo(row.latest.timestamp, now) : shortDate(row.latest.timestamp)) : 'Sin lectura registrada'}</p></div>
-                  <div className="text-xs text-slate-300"><p>{classContext(blocks, row.room, now)}</p><p className="mt-1 text-slate-500">Capacidad {row.room.max_capacity}</p></div>
-                  <div className="text-xs"><p className="flex items-center gap-1.5 text-slate-300"><span className={`h-1.5 w-1.5 rounded-full ${DOT[node.tone]}`} />{node.label}</p><p className="mt-1 text-slate-500">{strategyLabel(row)}</p></div>
-                  <div className="flex w-40 justify-end gap-2">{isAdmin && node.label === 'Sin aprovisionar' && <button className="btn btn-ghost px-2" onClick={() => setConnecting(row.room)} aria-label={`Conectar nodo a ${row.room.id}`}><Plug size={14} /></button>}<Link to={`/aulas/${encodeURIComponent(row.room.id)}`} className="btn btn-ghost">Abrir detalle <ArrowRight size={14} /></Link></div>
-                </article>
-              })}
-            </div>
+              <div className="flex gap-2 overflow-x-auto p-2 lg:flex-1 lg:flex-col lg:overflow-y-auto">
+                {list.map(row => {
+                  const state = stateOf(row)
+                  const active = selected?.room.id === row.room.id
+                  return (
+                    <button
+                      key={row.room.id}
+                      type="button"
+                      onClick={() => selectRoom(row.room.id)}
+                      aria-pressed={active}
+                      className={`min-w-[14rem] rounded-lg border px-3 py-3 text-left transition-colors lg:min-w-0 ${active
+                        ? 'border-blue-500/50 bg-blue-500/10 shadow-sm shadow-blue-950/40'
+                        : 'border-transparent hover:border-slate-700 hover:bg-slate-800/60'}`}
+                    >
+                      <span className="flex items-center justify-between gap-2">
+                        <span className="truncate font-semibold text-white">{row.room.id} <span className="font-normal text-slate-400">{shortName(row.room)}</span></span>
+                        <span className={`h-2 w-2 shrink-0 rounded-full ${DOT[state.tone]}`} />
+                      </span>
+                      <span className="mt-1 block truncate text-xs text-slate-500">{state.label} · {locationLabel(row.room)}</span>
+                    </button>
+                  )
+                })}
+              </div>
+            </aside>
 
-            <div className="divide-y divide-slate-800 md:hidden">
-              {list.map(row => {
-                const state = stateOf(row); const node = nodeLabel(row)
-                return <article key={row.room.id} className="space-y-3 p-4">
-                  <div className="flex items-start justify-between gap-3"><div><h2 className="font-semibold text-white">{row.room.id} <span className="font-normal text-slate-400">{shortName(row.room)}</span></h2><p className="text-xs text-slate-500">{locationLabel(row.room)}</p></div><span className="flex items-center gap-1.5 text-xs text-slate-300"><span className={`h-1.5 w-1.5 rounded-full ${DOT[state.tone]}`} />{state.label}</span></div>
-                  <Metrics row={row} />
-                  <div className="grid grid-cols-2 gap-3 text-xs text-slate-400"><span>{classContext(blocks, row.room, now)}</span><span className="flex items-center gap-1.5"><span className={`h-1.5 w-1.5 rounded-full ${DOT[node.tone]}`} />{node.label} · {strategyLabel(row)}</span></div>
-                  <div className="flex justify-end gap-2">{isAdmin && node.label === 'Sin aprovisionar' && <button className="btn btn-ghost" onClick={() => setConnecting(row.room)}><Plug size={14} /> Conectar</button>}<Link to={`/aulas/${encodeURIComponent(row.room.id)}`} className="btn btn-ghost">Abrir detalle <ArrowRight size={14} /></Link></div>
-                </article>
-              })}
-            </div>
+            {selected && selectedState && selectedNode && (
+              <article className="surface flex min-h-[27rem] min-w-0 flex-col overflow-hidden">
+                <header className="flex flex-wrap items-center gap-3 border-b border-slate-800 px-5 py-4">
+                  <div className="min-w-0">
+                    <h2 className="text-xl font-semibold text-white">{selected.room.id} <span className="text-sm font-normal text-slate-400">{shortName(selected.room)}</span></h2>
+                    <p className="mt-1 flex items-center gap-1.5 text-xs text-slate-400"><span className={`h-1.5 w-1.5 rounded-full ${DOT[selectedState.tone]}`} />{selectedState.label} · {locationLabel(selected.room)}</p>
+                  </div>
+                  <Link to={`/aulas/${encodeURIComponent(selected.room.id)}`} className="btn btn-primary ml-auto">Abrir detalle <ArrowRight size={14} /></Link>
+                </header>
+
+                <div className="shrink-0 overflow-x-auto border-b border-slate-800 px-5 pt-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                  <Tabs<PreviewTab> value={previewTab} onChange={setPreviewTab} items={[
+                    { value: 'readings', label: 'Lecturas actuales' },
+                    { value: 'context', label: 'Contexto' },
+                    { value: 'node', label: 'Nodo y estrategia' },
+                    { value: 'actions', label: 'Acciones' },
+                  ]} />
+                </div>
+
+                <div className="min-h-0 flex-1 overflow-y-auto p-5">
+                  {previewTab === 'readings' && (
+                    <div className="space-y-4">
+                      <div className="flex items-center gap-2 text-sm font-medium text-slate-200"><Activity size={16} className="text-blue-400" /> Últimas mediciones</div>
+                      <Metrics row={selected} />
+                      <p className="text-xs text-slate-500">{selected.latest ? (selected.fresh ? `Última lectura ${timeAgo(selected.latest.timestamp, now)}` : `Última lectura el ${shortDate(selected.latest.timestamp)}`) : 'Sin lectura registrada'}</p>
+                    </div>
+                  )}
+
+                  {previewTab === 'context' && (
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <div className="surface-inset rounded-lg border border-slate-800 p-4"><p className="flex items-center gap-2 text-xs text-slate-500"><CalendarDays size={14} /> Estado del aula</p><p className="mt-2 font-medium text-white">{classContext(blocks, selected.room, now)}</p></div>
+                      <div className="surface-inset rounded-lg border border-slate-800 p-4"><p className="flex items-center gap-2 text-xs text-slate-500"><Building2 size={14} /> Ubicación y capacidad</p><p className="mt-2 font-medium text-white">{locationLabel(selected.room)}</p><p className="mt-1 text-xs text-slate-400">Capacidad máxima: {selected.room.max_capacity} personas</p></div>
+                    </div>
+                  )}
+
+                  {previewTab === 'node' && (
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <div className="surface-inset rounded-lg border border-slate-800 p-4"><p className="flex items-center gap-2 text-xs text-slate-500"><Cpu size={14} /> Estado del nodo</p><p className="mt-2 flex items-center gap-2 font-medium text-white"><span className={`h-2 w-2 rounded-full ${DOT[selectedNode.tone]}`} />{selectedNode.label}</p></div>
+                      <div className="surface-inset rounded-lg border border-slate-800 p-4"><p className="text-xs text-slate-500">Estrategia activa</p><p className="mt-2 font-medium text-white">{strategyLabel(selected)}</p><p className="mt-1 text-xs text-slate-400">La configuración completa está disponible en el detalle del aula.</p></div>
+                    </div>
+                  )}
+
+                  {previewTab === 'actions' && (
+                    <div className="surface-inset rounded-lg border border-slate-800 p-5">
+                      <h3 className="font-medium text-white">Acciones rápidas</h3>
+                      <p className="mt-1 text-sm text-slate-400">Consulta el espacio operativo o aprovisiona el nodo sin duplicar la configuración avanzada.</p>
+                      <div className="mt-5 flex flex-wrap gap-2">
+                        <Link to={`/aulas/${encodeURIComponent(selected.room.id)}`} className="btn btn-primary">Abrir detalle <ArrowRight size={14} /></Link>
+                        {isAdmin && selectedNode.label === 'Sin aprovisionar' && <button className="btn btn-ghost" onClick={() => setConnecting(selected.room)}><Plug size={14} /> Conectar nodo</button>}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </article>
+            )}
           </div>
         )}
       </section>
