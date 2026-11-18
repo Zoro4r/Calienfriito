@@ -135,7 +135,7 @@ def main():
 
     # room_id and is_synthetic ride along as diagnostic columns (not model
     # features): per-room RMSE reporting and the synthetic/real split guard.
-    out = df[FEATURES + [TARGET, "room_id", "is_synthetic"]]
+    out = df[FEATURES + [TARGET, "room_id", "is_synthetic", "data_origin"]]
     out.to_csv(OUTPUT_CSV, index=False)
     print(f"Saved {len(out)} rows to {OUTPUT_CSV} (chronological order preserved)")
     print(out.describe().round(3))
@@ -171,7 +171,12 @@ def _clean(df: pd.DataFrame) -> pd.DataFrame:
     df = _add_actual(df)
     df[TARGET] = _compute_offset(df)
     df["is_synthetic"] = 0
-    return df[_BASE_COLS + [TARGET, "is_synthetic"]]
+    # Stored provenance, never inferred: documents older than the field read "unknown"
+    # (seed, HTTP and emulator readings cannot be told from hardware).
+    simulated = df["is_simulated"].fillna(False).astype(bool) if "is_simulated" in df.columns else pd.Series(False, index=df.index)
+    fallback = pd.Series(np.where(simulated, "simulated", "unknown"), index=df.index)
+    df["data_origin"] = df["data_origin"].fillna(fallback) if "data_origin" in df.columns else fallback
+    return df[_BASE_COLS + [TARGET, "is_synthetic", "data_origin"]]
 
 
 def _extract_expected(df: pd.DataFrame) -> pd.DataFrame:
@@ -269,6 +274,7 @@ def _generate_synthetic(n: int) -> pd.DataFrame:
         "outdoor_temp": outdoor,
         TARGET: target,
         "is_synthetic": 1,
+        "data_origin": "augmented",
     })
     return _attach_metadata(out)     # Tier 3: physical room metadata features
 

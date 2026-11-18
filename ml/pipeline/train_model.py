@@ -46,6 +46,9 @@ from common import bootstrap_people_load
 DATA_CSV = Path(__file__).parent / "data" / "features.csv"
 ROOM_MAP_JSON = Path(__file__).parent / "data" / "room_map.json"
 MODEL_OUTPUT = Path(__file__).resolve().parents[2] / "backend" / "app" / "ml" / "model.joblib"
+# Retraining never replaces the served model by itself: the bundle goes here as a
+# candidate, and only `--promote` copies it to MODEL_OUTPUT (then POST /admin/model/reload).
+CANDIDATE_DIR = Path(__file__).parent / "artifacts"
 
 # Order MUST match the ML feature vector in predictive_service.calculate_cooling_demand.
 # room_code (opaque) replaced by physical metadata: floor, volume_m3, ac_btu (Tier 3).
@@ -188,6 +191,10 @@ def main():
         "n_train": len(X_train),
         "n_test": len(X_test),
         "n_synthetic": n_synthetic,
+        # Provenance of the rows (extract_data.py): physical / simulated / unknown / augmented.
+        # "unknown" is not physical: seed and HTTP readings cannot be verified.
+        "origins": df["data_origin"].value_counts().to_dict() if "data_origin" in df.columns else None,
+        "label_kind": "synthetic",
         "features": FEATURES,
         "target": TARGET,
         "sklearn_version": sklearn.__version__,
@@ -210,9 +217,18 @@ def main():
         "metadata": metadata,
     }
 
-    MODEL_OUTPUT.parent.mkdir(parents=True, exist_ok=True)
-    joblib.dump(bundle, MODEL_OUTPUT)
-    print(f"\nBundle saved → {MODEL_OUTPUT}")
+    CANDIDATE_DIR.mkdir(parents=True, exist_ok=True)
+    candidate = CANDIDATE_DIR / f"model_{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}.joblib"
+    joblib.dump(bundle, candidate)
+    print(f"\nCandidate bundle saved → {candidate}")
+    if "--promote" not in sys.argv:
+        print("Served model untouched. Re-run with --promote to replace it.")
+    elif not beats:
+        print("Not promoted: the bundle does not beat its baselines.")
+    else:
+        MODEL_OUTPUT.parent.mkdir(parents=True, exist_ok=True)
+        joblib.dump(bundle, MODEL_OUTPUT)
+        print(f"Promoted → {MODEL_OUTPUT} (reload with POST /admin/model/reload)")
     print(json.dumps(metadata, indent=2))
 
 
