@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useRef } from 'react'
 import { useParams, Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { ArrowLeft, RefreshCw, AlertTriangle } from 'lucide-react'
 import api, { getApiErrorDetail } from '../api/client'
+import ContentLoading from '../components/ContentLoading'
 import { useAuth } from '../context/AuthContext'
 import type { StoredReading } from '../types'
 import Strategies from '../components/Strategies'
@@ -245,7 +246,7 @@ export default function RoomDetail() {
 
   // Until the first readings arrive, show nothing about the node: no 'Sin lecturas' or 'waiting' flash.
   if (loading || !readingsReady) {
-    return <p className="flex items-center justify-center gap-2 py-12 text-sm text-slate-400"><RefreshCw size={14} className="animate-spin" /> Cargando aula…</p>
+    return <ContentLoading title={id} label="Cargando aula…" />
   }
 
   const name = room ? (room.name.startsWith(room.id) ? room.name.slice(room.id.length).trim() : room.name) : ''
