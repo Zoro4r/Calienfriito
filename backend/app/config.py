@@ -31,6 +31,12 @@ ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "1440
 # (Barranco, UTEC — no DST). Override via env for other deployments.
 LOCAL_UTC_OFFSET_HOURS = int(os.getenv("LOCAL_UTC_OFFSET_HOURS", "-5"))
 
+# Days of raw 1 Hz node telemetry kept once it is rolled up per minute
+# (app/services/reading_rollups.py). 0 = keep everything (default): the history CSV,
+# the training export and the live tab read raw readings, so older ones vanish from
+# them; Historial and Estrategias keep working from the rollups.
+RAW_RETENTION_DAYS = int(os.getenv("RAW_RETENTION_DAYS", "0"))
+
 # MQTT ingestion of the ESP32 node telemetry (app/services/mqtt_ingest.py).
 # Disabled by default so tests and manual runs don't need a broker;
 # docker-compose enables it and points it at the `mosquitto` service.

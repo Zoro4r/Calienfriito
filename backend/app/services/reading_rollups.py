@@ -407,6 +407,33 @@ def live_aggregates(minutes: Iterable[dict], bucket_min: int) -> tuple[list[dict
     return out_rows, (totals if totals["n"] else None), out_min
 
 
+# ── Retention ───────────────────────────────────────────────────────────────────
+
+def retention_cutoff(upto: datetime, now: datetime, days: int) -> datetime | None:
+    """Raw readings before this instant may go: older than `days` AND already rolled up."""
+    if days <= 0:
+        return None
+    return min(upto, now - timedelta(days=days))
+
+
+async def purge_raw(db, days: int, now: datetime | None = None) -> int:
+    """Delete raw node readings older than `days` that are already in the rollups.
+    Readings without a node decision are never rolled up, so they are kept."""
+    if days <= 0:
+        return 0
+    now = now or datetime.utcnow()
+    deleted = 0
+    async for state in db[STATE].find({}):
+        cutoff = retention_cutoff(state["upto"], now, days)
+        res = await db["sensor_readings"].delete_many({
+            "sensor_id": state["_id"], "node_state.accion": {"$exists": True},
+            "timestamp": {"$lt": cutoff.strftime(FMT)}})
+        deleted += res.deleted_count
+    if deleted:
+        logger.info("Purged %d raw readings older than %d days (kept in reading_minutes)", deleted, days)
+    return deleted
+
+
 # ── Background loop ─────────────────────────────────────────────────────────────
 
 _task = None
@@ -428,6 +455,7 @@ async def roll_all(db, sensors: list[str], max_chunks: int = 4) -> int:
 def start_rollup_loop() -> None:
     """Background loop: keep `reading_minutes` up to date for every registered sensor."""
     from starlette.concurrency import run_in_threadpool
+    from app.config import RAW_RETENTION_DAYS
     from app.database import get_db
     from app.database_sql import SessionLocal
     from app.models.admin import SensorDevice
@@ -452,6 +480,7 @@ def start_rollup_loop() -> None:
         while True:
             try:
                 await roll_all(db, await run_in_threadpool(sensors))
+                await purge_raw(db, RAW_RETENTION_DAYS)
             except Exception:
                 logger.exception("Rolling up readings failed")
             await asyncio.sleep(ROLL_EVERY_S)

@@ -128,3 +128,11 @@ def test_live_aggregates_match_per_reading_averages():
     assert first["temp"] == pytest.approx(sum(temps) / len(temps))
     assert first["fan"] == pytest.approx(sum(d["node_state"]["ventilador_pwm"] / 255 for d in in_bucket) / len(in_bucket))
     assert len(minutes) == len({d["timestamp"][:16] for d in docs})
+
+
+def test_retention_never_deletes_what_is_not_rolled_up():
+    from app.services.reading_rollups import retention_cutoff
+    now = datetime(2026, 11, 20)
+    assert retention_cutoff(datetime(2026, 11, 19), now, 0) is None                       # disabled
+    assert retention_cutoff(datetime(2026, 11, 19), now, 7) == datetime(2026, 11, 13)     # by age
+    assert retention_cutoff(datetime(2026, 11, 10), now, 7) == datetime(2026, 11, 10)     # rollups behind
