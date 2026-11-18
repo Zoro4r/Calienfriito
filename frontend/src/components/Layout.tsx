@@ -104,20 +104,22 @@ export default function Layout() {
                                   : 'bg-orange-600 hover:bg-orange-500 shadow-orange-900/50'
   const tooltipText    = showReal
     ? `⚠ Peligro CO — Evacuar: ${affectedRooms}`
-    : `🛠️ Simulación de CO activa`
+    : 'Simulación de CO activa'
 
-  const modalBg        = showReal ? 'bg-red-950 border-red-500'   : 'bg-orange-950 border-orange-500'
-  const modalHeaderBdr = showReal ? 'border-red-800'              : 'border-orange-800'
+  // The simulation keeps the orange tone but with a quiet 1 px border: the strong
+  // red border is reserved for a real emergency.
+  const modalBg        = showReal ? 'border-2 bg-red-950 border-red-500' : 'border bg-orange-950 border-orange-900'
+  const modalHeaderBdr = showReal ? 'border-red-800'              : 'border-orange-900/70'
   const modalIconColor = showReal ? 'text-red-400'                : 'text-orange-400'
   const modalTitleColor= showReal ? 'text-red-200'                : 'text-orange-200'
   const modalRowBg     = showReal ? 'bg-red-900/50 border-red-700 divide-red-800'
-                                  : 'bg-orange-900/30 border-orange-700 divide-orange-800'
+                                  : 'bg-orange-900/30 border-orange-900 divide-orange-900'
   const modalPpmColor  = showReal ? 'bg-red-700/60 text-red-200'  : 'bg-orange-700/60 text-orange-200'
   const modalBtnBg     = showReal ? 'bg-red-600 hover:bg-red-500' : 'bg-orange-600 hover:bg-orange-500'
 
   const modalTitle = showReal
     ? '¡Alerta Crítica!'
-    : '🛠️ Simulación de Emergencia'
+    : 'Simulación de emergencia'
 
   const modalBody = showReal
     ? <>
@@ -135,9 +137,9 @@ export default function Layout() {
 
   const modalFooterText = showReal
     ? '🚨 Inicie el protocolo de evacuación inmediatamente.'
-    : '✅ No se requiere ninguna acción. Esta es una simulación de laboratorio.'
+    : 'No se requiere ninguna acción. Esta es una simulación de laboratorio.'
 
-  const modalFooterColor = showReal ? 'text-red-200 border-red-800' : 'text-orange-200 border-orange-800'
+  const modalFooterColor = showReal ? 'text-red-200 border-red-800' : 'text-orange-200 border-orange-900/70'
 
   function handleGoToLogin() {
     clearSessionExpired()
@@ -196,7 +198,7 @@ export default function Layout() {
             role="dialog"
             aria-modal="true"
             aria-labelledby="emergency-modal-title"
-            className={`border-2 rounded-xl shadow-2xl w-full max-w-lg ${modalBg}`}
+            className={`rounded-xl shadow-2xl w-full max-w-lg ${modalBg}`}
           >
 
             {/* Header */}
