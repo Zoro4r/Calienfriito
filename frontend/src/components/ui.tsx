@@ -265,7 +265,7 @@ export const AI_STATE: Record<string, { label: string; tone: Tone }> = {
 }
 
 export const MODEL_LABEL: Record<string, string> = {
-  ml: 'Modelo ML',
+  ml: 'Modelo ML (etiqueta sintética)',
   heuristic: 'Fórmula heurística',
   manual: 'Manual',
   none: 'Sin modelo',

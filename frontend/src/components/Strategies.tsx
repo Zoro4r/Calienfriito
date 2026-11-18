@@ -5,6 +5,7 @@ import api, { getApiErrorDetail } from '../api/client'
 import { fmt, parseUtc } from './ui'
 import { AXIS } from './NodeLive'
 import DayNav from './DayNav'
+import ForecastPanel from './ForecastPanel'
 
 // "Aprendizaje" tab: the predictive controller (Chronos-Bolt forecasts the temperature and
 // starts the fan early) vs the firmware rules. Success metric: minutes of class above
@@ -127,6 +128,7 @@ function RowTooltip({ active, payload, classes }: { active?: boolean; payload?: 
       <p className="flex items-center gap-1.5 tabular-nums text-slate-100"><span className="h-1.5 w-1.5 rounded-full" style={{ background: RULES_COLOR }} />Reglas: {r.rules == null ? '—' : `${fmt(r.rules, 1)} °C`}</p>
       {r.learning != null && <p className="flex items-center gap-1.5 tabular-nums text-slate-100"><span className="h-1.5 w-1.5 rounded-full" style={{ background: LEARN_COLOR }} />Control predictivo: {fmt(r.learning, 1)} °C</p>}
       {r.pred != null && <p className="flex items-center gap-1.5 tabular-nums text-slate-100"><span className="h-1.5 w-1.5 rounded-full" style={{ background: PRED_COLOR }} />Pronosticado 30 min antes: {fmt(r.pred, 1)} °C</p>}
+      {r.pred != null && r.rules != null && <p className="tabular-nums text-slate-400">Error del pronóstico: {r.pred - r.rules >= 0 ? '+' : '−'}{fmt(Math.abs(r.pred - r.rules), 1)} °C</p>}
       <p className="mt-0.5 text-slate-400">{inClass ? `Con clase${inClass.people ? ` · ${inClass.people} estudiantes` : ''}` : 'Sin clase'}</p>
     </div>
   )
@@ -212,6 +214,8 @@ export default function Strategies({ roomId, emptyMessage }: { roomId: string; e
           </p>
         )}
       </div>
+
+      {!sim && <ForecastPanel roomId={roomId} />}
 
       {error ? <p className="text-sm text-red-300">{error}</p>
         : !data ? <p className="flex items-center justify-center gap-2 py-16 text-sm text-slate-400"><RefreshCw size={14} className="animate-spin" /> Cargando la comparación…</p>
