@@ -112,6 +112,30 @@ def active_engine() -> str:
     return "ml" if _model is not None else "heuristic"
 
 
+def model_status() -> dict:
+    """What the loaded regressor is, and what its metrics do and do not show.
+
+    Its target (target_temp_offset) is built by a formula in ml/pipeline/extract_data.py,
+    not measured, so the metrics score how well it reproduces that formula: it is a
+    setpoint adjustment, never a validated model of the room's thermal dynamics.
+    """
+    metrics = _metadata.get("metrics") or {}
+    return {
+        "engine": active_engine(),
+        "loaded": _model is not None,
+        "predicts": "Ajuste del objetivo de temperatura por carga térmica (°C)",
+        "target": _metadata.get("target"),
+        "label_kind": "synthetic",
+        "physically_validated": False,
+        "drives_actuators": False,
+        "trained_at": _metadata.get("trained_at"),
+        "n_rows": _metadata.get("n_rows"),
+        "features": list(_features) if _model is not None else [],
+        "metrics": {k: metrics.get(k) for k in ("rmse", "r2", "baseline_heuristic_rmse", "beats_baselines")} if metrics else None,
+        "note": "Las métricas miden cuánto reproduce una fórmula sintética, no la eficacia del control físico.",
+    }
+
+
 async def calculate_cooling_demand(
     current_temp: float,
     room_context: dict,

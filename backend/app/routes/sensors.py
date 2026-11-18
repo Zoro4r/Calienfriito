@@ -1106,9 +1106,239 @@ def control_sensor(
         sensor_id, current_user.username, current_user.role,
         device.is_active, device.control_enabled,
     )
+    if device.room_id and not (device.is_active and device.control_enabled):
+        _hand_back_to_rules(device.room_id, current_user.username)
     return {
         "sensor_id": device.id,
         "room_id": device.room_id,
         "is_active": device.is_active,
         "control_enabled": device.control_enabled,
     }
+
+
+# ============================================================================
+# Predictive layer made visible: what the forecaster says now, how good it has been,
+# what it recommends, and who is allowed to act on it. Read-only: nothing here sends
+# an order. Learning orders go through room_controller only.
+# ============================================================================
+
+FORECAST_STALE_MIN = 15      # decisions every 5 min: older than this, the forecast is not current
+
+
+@router.get("/rooms/{room_id}/forecast")
+async def room_forecast(
+    room_id: str,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+    db_sql: Session = Depends(get_db_sql),
+    current_user: User = Depends(get_current_user),
+):
+    """The room's latest measured temperature next to the latest forecast, never mixed.
+
+    `observed` is a measurement (sensor, time, origin); `forecast` is a prediction (model,
+    when it was made, horizon); `baseline` is persistence (the temperature the forecast
+    started from). `quality` is the gate over the last 24 h; `recommendation` is a rule
+    over those facts; `mode` says who acts: local rules, observation (the model only
+    predicts and recommends), supervised predictive control, or fallback to the rules.
+    """
+    from app.services.data_service import node_in_use, occupancy_forecast
+    from app.services.forecast_controller import HORIZON_MIN, READY_MINUTES
+    from app.services.forecast_quality import recommend
+    from app.services.predictive_service import model_status
+    from app.services.room_controller import authorization, fallback_reason, get_controller
+
+    devices = await run_in_threadpool(
+        lambda: [(d.id, d.is_active, d.control_enabled)
+                 for d in db_sql.query(SensorDevice).filter(SensorDevice.room_id == room_id).all()]
+    )
+    sensors = [d[0] for d in devices]
+    control_enabled = any(active and enabled for _, active, enabled in devices)
+    now = datetime.utcnow()
+    try:
+        latest = await db["sensor_readings"].find(
+            {"sensor_id": {"$in": sensors}, "node_state.accion": {"$exists": True}},
+            {"_id": 0, "sensor_id": 1, "timestamp": 1, "temperature": 1, "is_simulated": 1, "data_origin": 1,
+             "camera_occupancy": 1, "node_state": 1},
+        ).sort("timestamp", -1).limit(1).to_list(length=1)
+        last_fc = await db["forecast_log"].find({"room_id": room_id}, {"_id": 0}).sort("ts", -1).limit(1).to_list(length=1)
+        state = await db["forecast_state"].find_one({"_id": room_id}, {"history": 1})
+        ctl = await get_controller(db, room_id)
+        auth = await authorization(db, room_id, now)
+    except PyMongoError as exc:
+        logger.error("MongoDB unavailable: %s", exc)
+        raise HTTPException(status_code=503, detail="Database unavailable") from exc
+
+    observed = None
+    ns: dict = {}
+    if latest:
+        d = latest[0]
+        ns = d.get("node_state") or {}
+        observed = {"temp_c": d.get("temperature"), "at": d["timestamp"][:19], "sensor_id": d["sensor_id"],
+                    "data_origin": d.get("data_origin") or ("simulated" if d.get("is_simulated") else "unknown")}
+
+    forecast = None
+    if last_fc:
+        f = last_fc[0]
+        age_min = (now - f["ts"]).total_seconds() / 60
+        forecast = {"model": f.get("model"), "horizon_min": HORIZON_MIN, "generated_at": f["ts"].strftime("%Y-%m-%dT%H:%M:%S"),
+                    "target_at": (f["ts"] + timedelta(minutes=HORIZON_MIN)).strftime("%Y-%m-%dT%H:%M:%S"),
+                    "median_c": f.get("forecast_30"), "p90_peak_c": f.get("forecast_30_p90"),
+                    "would_fan_pct": f.get("fan_pct"), "backfilled": bool(f.get("backfilled")),
+                    "data_origin": f.get("data_origin", "unknown"), "current": age_min <= FORECAST_STALE_MIN}
+    minutes_seen = len((state or {}).get("history") or [])
+    ready = minutes_seen >= READY_MINUTES
+    baseline = None
+    if forecast and last_fc[0].get("temp_now") is not None:
+        baseline = {"model": "persistencia", "value_c": last_fc[0]["temp_now"],
+                    "note": "La temperatura se mantiene como estaba al pronosticar."}
+
+    timetable = await run_in_threadpool(occupancy_forecast, db_sql, room_id, now, HORIZON_MIN)
+    in_use = bool(node_in_use(ns, (latest[0] if latest else {}).get("camera_occupancy"))) or any(c for c, _ in timetable)
+    current = bool(forecast and forecast["current"])
+    gate = auth.get("gate") or {}
+    recommendation = recommend(
+        ready=ready and current, temp_c=observed["temp_c"] if observed else None,
+        forecast_c=forecast["median_c"] if current else None, p90_c=forecast["p90_peak_c"] if current else None,
+        in_use=in_use, co_alarm=bool(ns.get("alarma_co")), validated=bool(gate.get("validated")),
+        sensor_ok=bool(observed and observed["temp_c"] is not None),
+    )
+
+    if ctl["mode"] == "learning":
+        mode = "predictive" if auth["authorized"] and not fallback_reason(room_id) else "fallback"
+    else:
+        mode = "observation" if current else "local"
+    return {
+        "room_id": room_id,
+        "observed": observed,
+        "forecast": forecast,
+        "baseline": baseline,
+        "data": {"minutes_seen": minutes_seen, "ready_minutes": READY_MINUTES, "ready": ready},
+        "quality": auth.get("gate"),
+        "recommendation": recommendation,
+        "mode": {"value": mode, "controller": ctl["mode"], "control_enabled": control_enabled,
+                 "authorized": auth["authorized"],
+                 "reason": None if mode == "predictive" else (fallback_reason(room_id) if mode == "fallback" and auth["authorized"] else auth["reason"])},
+        "regressor": model_status(),
+    }
+
+
+# Columns of the training export, in order. Labels (future temperatures) are NOT here:
+# they are built offline from these rows (ml/pipeline/thermal_dataset.py), so no row
+# ever carries information from its own future.
+TRAINING_COLUMNS = [
+    "timestamp_server_utc", "room_id", "sensor_id", "data_origin", "is_simulated",
+    "temperature", "humidity", "co2_ppm", "co_ppm", "co2_proxy_adc", "camera_occupancy",
+    "ocupado_nodo", "accion", "autoridad", "manual", "fan_applied_pct", "fan_target_pct", "fan_rpm",
+    "heater", "alarma_co", "bloqueo_s", "comando_id",
+    "ina_voltage_v", "ina_current_ma", "ina_power_mw",
+    "ai_model", "ai_target", "expected_occupancy", "actual_occupancy",
+    "forecast_model", "forecast_30", "forecast_30_p90", "forecast_fan_pct",
+]
+
+
+def _pwm_pct(value) -> float | None:
+    """Firmware PWM duty (0-255) as %."""
+    return None if value is None else round(value * 100 / 255, 1)
+
+
+def _training_row(d: dict, room_id: str) -> list:
+    ns, ca, la = d.get("node_state") or {}, d.get("cognitive_action") or {}, d.get("learning_action") or {}
+    authority = ns.get("autoridad") or (("manual" if ns.get("manual") else "local") if ns else None)
+    applied = _pwm_pct(ns["ventilador_pwm"]) if ns.get("ventilador_pwm") is not None else ns.get("ventilador_pct")
+    return [
+        d["timestamp"][:19], room_id, d.get("sensor_id"),
+        d.get("data_origin") or ("simulated" if d.get("is_simulated") else "unknown"), int(bool(d.get("is_simulated"))),
+        d.get("temperature"), d.get("humidity"), d.get("co2_ppm"), d.get("co_ppm"), ns.get("co2_proxy"), d.get("camera_occupancy"),
+        ns.get("ocupado"), ns.get("accion"), authority, ns.get("manual"),
+        applied, _pwm_pct(ns.get("ventilador_pwm_objetivo")), ns.get("ventilador_rpm"),
+        ns.get("calefactor"), ns.get("alarma_co"), ns.get("bloqueo_s"), ns.get("comando_id"),
+        d.get("ina_voltage_v"), d.get("ina_current_ma"), d.get("ina_power_mw"),
+        ca.get("model"), ca.get("target"), ca.get("expected_occupancy"), ca.get("actual_occupancy"),
+        la.get("model"), la.get("forecast_30"), la.get("forecast_30_p90"), la.get("fan_pct"),
+    ]
+
+
+def _median_step_s(rows: list[list]) -> float | None:
+    ts = [datetime.fromisoformat(r[0]) for r in rows]
+    steps = sorted((b - a).total_seconds() for a, b in zip(ts, ts[1:]))
+    return steps[len(steps) // 2] if steps else None
+
+
+def training_export_body(docs: list[dict], room_id: str) -> tuple[str, list[list]]:
+    """CSV text and rows for exported documents (pure: used by the route and the tests)."""
+    import csv
+    import io
+
+    rows = [_training_row(d, room_id) for d in docs]
+    buf = io.StringIO()
+    writer = csv.writer(buf, lineterminator="\n")
+    writer.writerow(TRAINING_COLUMNS)
+    writer.writerows(["" if v is None else v for v in r] for r in rows)
+    return buf.getvalue(), rows
+
+
+@router.get("/training-export")
+async def training_export(
+    room_id: str,
+    from_: str = Query(..., alias="from", pattern=r"^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2})?)?$"),
+    to: str = Query(..., pattern=r"^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2})?)?$"),
+    origin: str = Query("all", pattern="^(all|physical|simulated|unknown)$"),
+    format: str = Query("csv", pattern="^(csv|json)$"),
+    db: AsyncIOMotorDatabase = Depends(get_db),
+    db_sql: Session = Depends(get_db_sql),
+    current_user: User = Depends(get_current_user),
+):
+    """Readings of one room over a range (naive UTC, `to` exclusive) for offline training.
+
+    Read-only: the stored documents are exported as they are, with their provenance
+    (`data_origin`: physical, simulated or unknown, the last for documents older than
+    the field). `format=json` returns `{manifest, columns, rows}`; the CSV carries the
+    same manifest in the `X-Export-Manifest` header. At most 31 days per request.
+    """
+    import hashlib
+    import json
+    from fastapi.responses import Response
+
+    if current_user.role == "guest":
+        raise HTTPException(status_code=403, detail="Guests cannot export training data.")
+    start, end = datetime.fromisoformat(from_), datetime.fromisoformat(to)
+    if end <= start or end - start > timedelta(days=31):
+        raise HTTPException(status_code=422, detail="Range must be positive and at most 31 days.")
+    sensors = await run_in_threadpool(
+        lambda: [d.id for d in db_sql.query(SensorDevice).filter(SensorDevice.room_id == room_id).all()]
+    )
+    match: dict = {"sensor_id": {"$in": sensors},
+                   "timestamp": {"$gte": start.strftime("%Y-%m-%dT%H:%M:%S"), "$lt": end.strftime("%Y-%m-%dT%H:%M:%S")}}
+    if origin == "simulated":
+        match["is_simulated"] = True
+    elif origin == "physical":
+        match["data_origin"] = "physical"
+    elif origin == "unknown":
+        match["is_simulated"] = {"$ne": True}
+        match["data_origin"] = {"$in": [None, "unknown"]}
+    try:
+        docs = await db["sensor_readings"].find(match, {"_id": 0}).sort("timestamp", 1).to_list(length=None)
+    except PyMongoError as exc:
+        logger.error("MongoDB unavailable: %s", exc)
+        raise HTTPException(status_code=503, detail="Database unavailable") from exc
+
+    body, rows = training_export_body(docs, room_id)
+    origins: dict[str, int] = {}
+    for r in rows:
+        origins[r[3]] = origins.get(r[3], 0) + 1
+    temps = [r[5] for r in rows]
+    manifest = {
+        "room_id": room_id, "from": start.strftime("%Y-%m-%dT%H:%M:%S"), "to": end.strftime("%Y-%m-%dT%H:%M:%S"),
+        "origin_filter": origin, "rows": len(rows), "origins": origins, "sensors": sensors,
+        "first": rows[0][0] if rows else None, "last": rows[-1][0] if rows else None,
+        "missing_temperature_pct": round(100 * sum(t is None for t in temps) / len(temps), 1) if temps else None,
+        "median_step_s": _median_step_s(rows),
+        "sha256": hashlib.sha256(body.encode()).hexdigest(),
+        "generated_at": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S"),
+        "labels": "none: build T+h labels offline (ml/pipeline/thermal_dataset.py)",
+    }
+    if format == "json":
+        return {"manifest": manifest, "columns": TRAINING_COLUMNS, "rows": rows}
+    return Response(body, media_type="text/csv", headers={
+        "Content-Disposition": f'attachment; filename="entrenamiento_{room_id}_{start:%Y%m%d}_{end:%Y%m%d}.csv"',
+        "X-Export-Manifest": json.dumps(manifest, ensure_ascii=True),
+    })
