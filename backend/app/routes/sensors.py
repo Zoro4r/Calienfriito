@@ -123,12 +123,33 @@ async def ingest_reading(
 # ANTES: @router.get("/")
 # AHORA: se agrega response_model=List[SensorReadingOut] — es el endpoint de
 # la Action 1 (Estado del aula) de la guía de Watson.
+# fields=chart: only what the room's live charts read over the history window
+# (values, timestamps, and the node_state keys used by stateKey, the MQ-135 chart,
+# node detection and the simulation-speed chip). The newest reading is fetched full.
+CHART_PROJECTION = {
+    "_id": 0,
+    "timestamp": 1,
+    "sensor_id": 1,
+    "temperature": 1,
+    "humidity": 1,
+    "co2_ppm": 1,
+    "co_ppm": 1,
+    "is_simulated": 1,
+    "node_state.accion": 1,
+    "node_state.alarma_co": 1,
+    "node_state.manual": 1,
+    "node_state.co2_proxy": 1,
+    "node_state.uptime_s": 1,
+}
+
+
 @router.get("/", response_model=List[SensorReadingOut])
 async def list_readings(
     room_id: Optional[str] = None,
     sensor_id: Optional[str] = None,
     limit: int = Query(40, ge=1, le=2000),
     since: Optional[str] = Query(None, description="Only readings newer than this stored timestamp (incremental polling)"),
+    fields: str = Query("full", pattern="^(full|chart)$", description="chart: light documents for the live charts"),
     db: AsyncIOMotorDatabase = Depends(get_db),
     db_sql: Session = Depends(get_db_sql),
     current_user: User = Depends(get_current_user),
@@ -147,7 +168,8 @@ async def list_readings(
 
     if since:
         mongo_filter["timestamp"] = {"$gt": since}
-    cursor = db["sensor_readings"].find(mongo_filter).sort("timestamp", -1).limit(limit)
+    projection = CHART_PROJECTION if fields == "chart" else None
+    cursor = db["sensor_readings"].find(mongo_filter, projection).sort("timestamp", -1).limit(limit)
     docs = await cursor.to_list(length=limit)
     for d in docs:
         d.pop("_id", None)

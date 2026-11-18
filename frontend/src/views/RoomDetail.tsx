@@ -150,10 +150,22 @@ export default function RoomDetail() {
     let cancelled = false
     newestRef.current = null
     setReadingsReady(false)
-    const initial = () => api.get<StoredReading[]>(`/sensors/?room_id=${id}&limit=${fullHistory ? READINGS_LIMIT : 60}`)
-      .then(r => {
+    // Live tab: the long window comes light (fields=chart: values + the node_state keys the charts
+    // read); then the newest readings are fetched full, so readings[0] (latest) is always complete.
+    const load = async (): Promise<StoredReading[]> => {
+      if (!fullHistory) return (await api.get<StoredReading[]>(`/sensors/?room_id=${id}&limit=60`)).data ?? []
+      const light = (await api.get<StoredReading[]>(`/sensors/?room_id=${id}&limit=${READINGS_LIMIT}&fields=chart`)).data ?? []
+      // Full docs from the newest light one on (plus any that arrived meanwhile), replacing it.
+      const after = light[1]?.timestamp
+      const full = (await api.get<StoredReading[]>(after
+        ? `/sensors/?room_id=${id}&since=${encodeURIComponent(after)}&limit=500`
+        : `/sensors/?room_id=${id}&limit=1`)).data ?? []
+      if (!full.length) return light
+      return after ? [...full, ...light.filter(r => r.timestamp <= after)].slice(0, MAX_KEEP) : full
+    }
+    const initial = () => load()
+      .then(d => {
         if (cancelled) return
-        const d = r.data ?? []
         setReadings(d)
         newestRef.current = d[0]?.timestamp ?? null
         setNow(Date.now())
