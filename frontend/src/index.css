@@ -97,10 +97,13 @@
 @keyframes demo-drift { 0%, 100% { transform: translateX(0); } 50% { transform: translateX(18px); } }
 .demo-ring { animation: demo-ring 1s ease-out infinite; transform-box: fill-box; transform-origin: center; }
 .demo-glow { animation: demo-glow 1.4s ease-in-out infinite; }
+/* LED blinking like the node's (0.5 s on, 0.5 s off) when the DHT stops answering */
+@keyframes demo-blink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: .15; } }
+.demo-blink { animation: demo-blink 1s step-end infinite; }
 .demo-bob { animation: demo-bob 2.2s ease-in-out infinite; }
 .demo-float { animation: demo-float 4s ease-in-out infinite; }
 .demo-flow { animation: demo-flow 1.2s linear infinite; }
 .demo-drift { animation: demo-drift 4s ease-in-out infinite; }
 @media (prefers-reduced-motion: reduce) {
-  .fan-spin, .heat-wave, .demo-ring, .demo-glow, .demo-bob, .demo-float, .demo-flow, .demo-drift { animation: none; }
+  .fan-spin, .heat-wave, .demo-ring, .demo-glow, .demo-blink, .demo-bob, .demo-float, .demo-flow, .demo-drift { animation: none; }
 }

@@ -43,7 +43,7 @@ const ledKey = (led?: string) => { const k = (led ?? '').split(' ')[0].toUpperCa
 // The node's answer in plain words.
 function explain(n: NodeState, p: Params, holdLeft: number): { state: string; why: string } {
   if (n.alarma_co) return { state: 'Alarma de CO', why: 'hay CO en el aire' }
-  if (n.fallo_dht) return { state: 'En espera', why: 'el DHT no responde: el nodo pasa a estado seguro' }
+  if (n.fallo_dht) return { state: 'Sensor caído', why: 'el DHT no responde: estado seguro y LED verde parpadeando' }
   if (n.manual) return { state: 'Orden manual', why: 'llegó una orden desde el dashboard' }
   if (n.bloqueo_s) return { state: 'Mantiene el estado', why: `el cambio llegó antes de ${HOLD_S} s: cambia en ${holdLeft || n.bloqueo_s} s` }
   if (n.accion === 'DISABLED') return { state: 'Aula vacía', why: 'casi no hay CO₂: no hay clase' }
@@ -81,7 +81,7 @@ function Classroom({ p, node }: { p: Params; node: NodeState | null }) {
       <div className="absolute left-[70px] top-[62px] flex items-center gap-2.5">
         <div className="relative flex h-10 w-16 items-center justify-center rounded-md border border-slate-600 bg-slate-950 text-[11px] text-slate-400">
           ESP32
-          <span className={`absolute -right-1.5 -top-1.5 h-2.5 w-2.5 rounded-full ${ledOn ? 'demo-glow' : ''}`}
+          <span className={`absolute -right-1.5 -top-1.5 h-2.5 w-2.5 rounded-full ${node?.fallo_dht ? 'demo-blink' : ledOn ? 'demo-glow' : ''}`}
             style={{ background: led, boxShadow: ledOn ? `0 0 10px ${led}` : 'none' }} />
         </div>
         {buzz && (
