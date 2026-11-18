@@ -10,6 +10,7 @@ import RoomHistory from '../components/RoomHistory'
 import NodeRules from '../components/NodeRules'
 import NodeControl from '../components/NodeControl'
 import RoomInfra from '../components/RoomInfra'
+import RoomWeek from '../components/RoomWeek'
 import {
   NodeStatusCard, FW, LiveChart, Panel, SensorCard, stateKey, niceAxis,
   coBand, humBand, occBand, occupiedAt, tempBand, type Point,
@@ -45,7 +46,7 @@ interface SensorDevice {
   _updating?: boolean
 }
 
-export type Tab = 'vivo' | 'estrategias' | 'control' | 'historial' | 'config' | 'hardware'
+export type Tab = 'vivo' | 'estrategias' | 'control' | 'historial' | 'reservas' | 'config' | 'hardware'
 
 interface WeeklySlot { day_of_week: number; start_time: string; end_time: string; expected_people: number }
 interface RoomReservation { id: number; room_id: string; username?: string; start_time: string; end_time: string; expected_occupancy: number }
@@ -96,9 +97,11 @@ export default function RoomDetail() {
   const { user } = useAuth()
   const isGuest = user?.role === 'guest'
   const isAdmin = user?.role === 'admin'
+  // Reservations (one-day bookings) are for admins and collaborators only.
+  const canReserve = isAdmin || user?.role === 'collaborator'
   const [params, setParams] = useSearchParams()
   const requestedTab = params.get('tab') as Tab | null
-  const tab: Tab = requestedTab && ['vivo', 'estrategias', 'control', 'historial', 'config', 'hardware'].includes(requestedTab)
+  const tab: Tab = requestedTab && ['vivo', 'estrategias', 'control', 'historial', 'reservas', 'config', 'hardware'].includes(requestedTab)
     ? requestedTab : 'vivo'
   const setTab = (t: Tab) => setParams(t === 'vivo' ? {} : { tab: t }, { replace: true })
   const { toast, notify, clear } = useToast()
@@ -297,7 +300,7 @@ export default function RoomDetail() {
   )
 
   return (
-    <div className={`flex flex-col gap-4 ${tab === 'vivo' || tab === 'historial' || tab === 'estrategias' || tab === 'control' || tab === 'hardware' || (tab === 'config' && hasNode) ? 'lg:h-full lg:min-h-0' : ''}`}>
+    <div className={`flex flex-col gap-4 ${tab === 'vivo' || tab === 'historial' || tab === 'reservas' || tab === 'estrategias' || tab === 'control' || tab === 'hardware' || (tab === 'config' && hasNode) ? 'lg:h-full lg:min-h-0' : ''}`}>
       {/* ── Context header ── */}
       <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2">
         <Link to="/aulas" className="btn btn-ghost px-2" aria-label="Volver a las aulas">
@@ -338,6 +341,7 @@ export default function RoomDetail() {
           { value: 'vivo', label: 'En vivo' },
           ...(hasNode ? [{ value: 'estrategias' as Tab, label: 'Automatización' }, { value: 'control' as Tab, label: 'Control' }] : []),
           { value: 'historial', label: 'Historial' },
+          ...(canReserve ? [{ value: 'reservas' as Tab, label: 'Reservas' }] : []),
           { value: 'config', label: 'Configuración' },
           ...(isAdmin ? [{ value: 'hardware' as Tab, label: 'Hardware' }] : []),
         ]}
@@ -430,6 +434,13 @@ export default function RoomDetail() {
 
       {/* ── Historial ── */}
       {tab === 'historial' && id && <RoomHistory roomId={id} />}
+
+      {/* ── Reservas: the room's week; admins and collaborators book it ── */}
+      {tab === 'reservas' && canReserve && room && (
+        <div className="surface flex min-h-0 flex-1 flex-col overflow-hidden">
+          <RoomWeek room={room} />
+        </div>
+      )}
 
       {tab === 'hardware' && isAdmin && room && (
         <div className="surface min-h-0 flex-1 overflow-y-auto">
