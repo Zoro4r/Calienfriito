@@ -401,6 +401,7 @@ async def room_history(
     from datetime import date as date_cls
     from fastapi.responses import Response
     from app.services.room_history import FMT, OFFSET, PROJECTION, day_bounds, equipment_for, summarize_day, ina_energy_series
+    from app.services.reading_rollups import load_minutes, summarize_minutes
 
     sensors = await run_in_threadpool(
         lambda: [d.id for d in db_sql.query(SensorDevice).filter(SensorDevice.room_id == room_id).all()]
@@ -419,8 +420,14 @@ async def room_history(
             data_start = datetime.fromisoformat(first[0]["timestamp"][:19])
             start, end = day_bounds((data_start + OFFSET).date())[0], day_bounds((data_end + OFFSET).date())[1]
         match = {**base, "timestamp": {"$gte": start.strftime(FMT), "$lt": end.strftime(FMT)}}
-        docs = await db["sensor_readings"].find(match, PROJECTION).sort("timestamp", 1).to_list(length=None)
         meta = await db["strategy_simulation_meta"].find_one({"_id": room_id})
+        # The day view reads per-minute rollups (~1 440 small documents), not ~86 400 readings.
+        by_sensor = {} if format == "csv" else await load_minutes(db, sensors, start, end, verify=True)
+        docs: list[dict] = []
+        if format == "csv" or len(by_sensor) > 1:
+            # CSV lists every reading; several nodes in one room interleave their readings,
+            # which per-sensor rollups cannot replay, so they keep the raw path.
+            docs = await db["sensor_readings"].find(match, PROJECTION).sort("timestamp", 1).to_list(length=None)
     except PyMongoError as exc:
         logger.error("MongoDB unavailable: %s", exc)
         raise HTTPException(status_code=503, detail="Database unavailable") from exc
@@ -465,8 +472,13 @@ async def room_history(
         configured_room = await run_in_threadpool(lambda: db_sql.query(Room).filter(Room.id == room_id).first())
         if configured_room:
             equipment["fan_max_w"] = configured_room.fan_power_w
-    result = summarize_day(docs, equipment["fan_max_w"], equipment["heater_w"], timetable)
-    result["summary"]["ina_energy_wh"] = next((value for value in reversed(ina_wh) if value is not None), None)
+    if docs:
+        result = summarize_day(docs, equipment["fan_max_w"], equipment["heater_w"], timetable)
+        result["summary"]["ina_energy_wh"] = next((value for value in reversed(ina_wh) if value is not None), None)
+    else:
+        minutes = next(iter(by_sensor.values()), [])
+        result, energy = await run_in_threadpool(summarize_minutes, minutes, equipment["fan_max_w"], equipment["heater_w"], timetable)
+        result["summary"]["ina_energy_wh"] = energy
     if meta and meta.get("start") and meta["start"] < end and meta["end"] >= start:
         # Simulated days know how many people came: same class intervals as "Aprendizaje".
         from app.services.strategy_series import _intervals
