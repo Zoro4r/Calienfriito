@@ -192,7 +192,12 @@ export default function Simulation() {
       co2_ppm: co2Of(params.people), co_ppm: params.co ? 80 : 1, manual: params.mode === 'manual',
       hold_s: holdS, hold_temperature: holdS ? HOLD_FROM_C : null,
     }).then(r => { setNode(r.data.node_state); setPhysical(!!r.data.physical); setError(null); sent.current = true })
-      .catch(err => { setError(getApiErrorDetail(err) ?? 'No se pudo enviar la lectura.'); setActive(false) })
+      .catch(err => {
+        // A server restart (502/503) or a network blip: keep the scenario and retry on the next send.
+        const status = err?.response?.status as number | undefined
+        if (!status || status >= 500) { setError('Sin respuesta del servidor: reintentando…'); return }
+        setError(getApiErrorDetail(err) ?? 'No se pudo enviar la lectura.'); setActive(false)
+      })
   }, [])
 
   // While active: send right away on every change, then every few seconds.
@@ -228,7 +233,7 @@ export default function Simulation() {
   const preset = PRESETS.find(x => x.p.people === p.people && x.p.temp === p.temp && x.p.co === p.co && x.p.mode === p.mode)
   // The physical node runs its own hysteresis: its countdown is the one it reports.
   const holdLeft = physical ? node?.bloqueo_s ?? 0 : Math.max(0, Math.ceil((holdUntil.current - now) / 1000))
-  const info = node ? explain(node, p, holdLeft) : null
+  const info = node && active ? explain(node, p, holdLeft) : null
   const led = LED[ledKey(node?.led)]
 
   return (
