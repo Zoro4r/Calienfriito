@@ -209,34 +209,14 @@ async def _live_series(db, sensors: list[str], range_key: str, anchor: date | No
     data_start = datetime.fromisoformat(first[0]["timestamp"][:19])
     start, end, anchor = period(range_key, anchor, data_end)
     fmt_ = "%Y-%m-%dT%H:%M:%S"
-    match = {**base, "timestamp": {"$gte": start.strftime(fmt_), "$lt": end.strftime(fmt_)}}
-    ts = {"$toDate": {"$substrBytes": ["$timestamp", 0, 19]}}
-    fan = {"$divide": [{"$ifNull": ["$node_state.ventilador_pwm", 0]}, 255]}
-    heat = {"$cond": ["$node_state.calefactor", 1, 0]}
-    # One pass over the period's readings (~86 000 a day at 1 Hz): buckets, totals and
-    # the temperature of each minute come out of the same scan.
-    facets = await db["sensor_readings"].aggregate([
-        {"$match": match},
-        {"$addFields": {"_t": ts, "_fan": fan, "_heat": heat}},
-        {"$facet": {
-            "rows": [
-                {"$group": {
-                    "_id": {"b": {"$dateTrunc": {"date": "$_t", "unit": "minute", "binSize": bucket_min}}},
-                    "temp": {"$avg": "$temperature"}, "fan": {"$avg": "$_fan"}, "heat": {"$avg": "$_heat"},
-                }},
-                {"$sort": {"_id.b": 1}},
-            ],
-            "totals": [
-                {"$group": {"_id": None, "n": {"$sum": 1}, "fan3": {"$sum": {"$pow": ["$_fan", 3]}},
-                            "heat": {"$sum": "$_heat"}, "first": {"$min": "$timestamp"}}},
-            ],
-            "minutes": [
-                {"$group": {"_id": {"$dateTrunc": {"date": "$_t", "unit": "minute"}}, "temp": {"$avg": "$temperature"}}},
-            ],
-        }},
-    ]).to_list(length=None)
-    rows, totals, minutes = facets[0]["rows"], facets[0]["totals"], facets[0]["minutes"]
-    t = totals[0] if totals else None
+    # Buckets, totals and the temperature of each minute come from the per-minute rollups
+    # (reading_rollups): ~1 440 small documents a day instead of ~86 400 readings. Whole
+    # minutes only, so the 12 h window is widened to the minutes it touches.
+    from app.services.reading_rollups import live_aggregates, load_minutes
+    lo = start.replace(second=0, microsecond=0)
+    hi = end if end == end.replace(second=0, microsecond=0) else end.replace(second=0, microsecond=0) + timedelta(minutes=1)
+    by_sensor = await load_minutes(db, sensors, lo, hi, projection={"ina": 0, "segs": {"$slice": 1}})
+    rows, t, minutes = live_aggregates((m for ms in by_sensor.values() for m in ms), bucket_min)
     step_s = 1.0
     if t and t["n"] > 1:
         span_end = min(end, data_end)
