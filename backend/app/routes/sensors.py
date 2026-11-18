@@ -1,4 +1,5 @@
 import logging
+import time
 from datetime import datetime, timezone, timedelta
 # CAMBIO: antes era "from typing import Optional" — se agregó "List" porque
 # ahora usamos response_model=List[...] en list_readings.
@@ -28,6 +29,8 @@ router = APIRouter()
 # a node decision. Node telemetry (node_state set) is kept even when the node itself
 # runs in a simulator (Wokwi), because it is the history RF-30/RF-31 are computed on.
 SIM_TOOL_READINGS = {"is_simulated": True, "node_state": None}
+SIM_PURGE_EVERY_S = 30
+_last_sim_purge = 0.0
 
 
 # ============================================================================
@@ -742,14 +745,20 @@ async def get_co_emergencies(
 
     now = datetime.now(timezone.utc)
 
-    # Purge simulated readings older than 15 seconds — if the simulator stops sending,
-    # the DB is clean within one polling cycle and the frontend receives nothing.
+    # Purge simulated readings older than 15 seconds, so a stopped simulator leaves the DB
+    # clean. Every open dashboard polls this endpoint every 5 s: the purge runs at most once
+    # per SIM_PURGE_EVERY_S and only looks at the last hour, because an unbounded delete scans
+    # the whole timestamp index and piled-up purges starved Mongo for every other view.
+    global _last_sim_purge
     fifteen_sec_ago = (now - timedelta(seconds=15)).strftime("%Y-%m-%dT%H:%M:%S.%f")
-    purge = await db["sensor_readings"].delete_many(
-        {**SIM_TOOL_READINGS, "timestamp": {"$lt": fifteen_sec_ago}}
-    )
-    if purge.deleted_count:
-        print(f"Purging old simulation data...")
+    if time.monotonic() - _last_sim_purge >= SIM_PURGE_EVERY_S:
+        _last_sim_purge = time.monotonic()
+        hour_ago = (now - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%S.%f")
+        purge = await db["sensor_readings"].delete_many(
+            {**SIM_TOOL_READINGS, "timestamp": {"$gte": hour_ago, "$lt": fifteen_sec_ago}}
+        )
+        if purge.deleted_count:
+            logger.info("Purged %d old simulated readings", purge.deleted_count)
 
     cursor = db["sensor_readings"].find(
         {"co_ppm": {"$gt": 50}, "timestamp": {"$gte": fifteen_sec_ago}}
