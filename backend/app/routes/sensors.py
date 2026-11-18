@@ -781,13 +781,27 @@ class OverrideIn(BaseModel):
 OVERRIDE_ACTIONS = {"fan": "COOLING", "on": "COOLING", "heater": "HEATING", "off": "STANDBY"}
 
 
-def override_command(mode: str, minutes: int, by: str, level: int = 100) -> dict:
-    """MQTT command for a manual order; raises ValueError for an unknown mode."""
+def override_command(mode: str, minutes: int, by: str, level: int = 100,
+                     authority: str = "manual", now: datetime | None = None) -> dict:
+    """MQTT command for a remote order; raises ValueError for an unknown mode.
+
+    `modo` stays "manual" so nodes flashed before these fields keep working. Newer
+    firmware reads `autoridad` (manual: a person; predictivo: the learning controller,
+    cancelled by the node as soon as it loses the server) and `expira_utc` (epoch s):
+    a retained order replayed after a reboot is rejected once expired, instead of
+    restarting its full duration. `id` is echoed back in telemetry as `comando_id`.
+    `now` is naive UTC (the backend's convention) or aware.
+    """
     if mode == "auto":
         return {"modo": "auto"}
     if mode not in OVERRIDE_ACTIONS:
         raise ValueError(mode)
-    command = {"modo": "manual", "accion": OVERRIDE_ACTIONS[mode], "duracion_s": minutes * 60, "por": by}
+    import uuid
+    now = now or datetime.now(timezone.utc)
+    issued = int((now if now.tzinfo else now.replace(tzinfo=timezone.utc)).timestamp())
+    command = {"modo": "manual", "accion": OVERRIDE_ACTIONS[mode], "duracion_s": minutes * 60, "por": by,
+               "id": uuid.uuid4().hex[:12], "autoridad": authority,
+               "emitida_utc": issued, "expira_utc": issued + minutes * 60}
     if OVERRIDE_ACTIONS[mode] == "COOLING":
         command["nivel"] = level
     return command
@@ -866,6 +880,8 @@ async def override_room(
         "level": fan_level if command.get("accion") == "COOLING" else None,
         "started_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
         "by": current_user.username,
+        "command_id": command.get("id"),
+        "authority": command.get("autoridad"),
     }
     try:
         await db["manual_orders"].replace_one({"_id": room_id}, order, upsert=True)
@@ -899,20 +915,53 @@ class ControllerIn(BaseModel):
 async def room_controller(
     room_id: str,
     db: AsyncIOMotorDatabase = Depends(get_db),
+    db_sql: Session = Depends(get_db_sql),
     current_user: User = Depends(get_current_user),
 ):
     """Who drives the room (rules or learning), who chose it and when (naive UTC),
-    plus the last order the learning controller sent, if any."""
-    from app.services.room_controller import ORDER_BY, get_controller
+    plus the last order the learning controller sent, if any.
+
+    Also whether learning may drive now (`authorized`, with the forecast `gate`), the
+    `fallback` reason when learning was chosen but the rules are acting, and what the
+    node reported about the last order (`ack`: applied / rejected / expired / pending).
+    """
+    from app.services.room_controller import ORDER_BY, authorization, fallback_reason, get_controller
     try:
         ctl = await get_controller(db, room_id)
         order = await db["manual_orders"].find_one({"_id": room_id})
+        auth = await authorization(db, room_id)
+        last = None
+        if order and order.get("by") == ORDER_BY:
+            last = {k: order.get(k) for k in ("mode", "level", "minutes", "started_at", "command_id")}
+            last["ack"] = await _order_ack(db, db_sql, room_id, order)
     except PyMongoError as exc:
         raise HTTPException(status_code=503, detail="Database unavailable") from exc
-    last = None
-    if order and order.get("by") == ORDER_BY:
-        last = {k: order.get(k) for k in ("mode", "level", "minutes", "started_at")}
-    return {"room_id": room_id, **ctl, "last_order": last}
+    fallback = None
+    if ctl["mode"] == "learning":
+        fallback = auth["reason"] if not auth["authorized"] else fallback_reason(room_id)
+    return {"room_id": room_id, **ctl, "last_order": last,
+            "authorized": auth["authorized"], "authorization_reason": auth["reason"],
+            "gate": auth.get("gate"), "fallback": fallback}
+
+
+async def _order_ack(db, db_sql: Session, room_id: str, order: dict) -> str | None:
+    """What the node said about an order, from the `comando_id` / `comando_estado` it echoes.
+
+    None when the order has no id (sent before ids existed) or it is a hand-back to the rules.
+    """
+    if not order.get("command_id"):
+        return None
+    sensors = await run_in_threadpool(
+        lambda: [d.id for d in db_sql.query(SensorDevice).filter(SensorDevice.room_id == room_id).all()]
+    )
+    latest = await db["sensor_readings"].find(
+        {"sensor_id": {"$in": sensors}, "node_state.comando_id": order["command_id"]},
+        {"node_state.comando_estado": 1},
+    ).sort("timestamp", -1).limit(1).to_list(length=1)
+    if not latest:
+        return "pending"      # not echoed yet, or firmware without acknowledgements
+    state = (latest[0].get("node_state") or {}).get("comando_estado")
+    return {"aplicado": "applied", "rechazado": "rejected", "vencido": "expired"}.get(state, "pending")
 
 
 class NodeSettingsIn(BaseModel):
@@ -950,15 +999,26 @@ async def set_room_controller(
     db: AsyncIOMotorDatabase = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Switch between the node's rules and the learning controller (admins only)."""
+    """Switch between the node's rules and the learning controller (admins only).
+
+    Learning is refused (409) until the forecast passes its gate and the room's device
+    has control enabled: an unvalidated forecaster never takes the actuator.
+    """
     from app.config import MQTT_ENABLED
-    from app.services.room_controller import CONTROLLERS, get_controller, set_controller
+    from app.services.room_controller import CONTROLLERS, authorization, get_controller, set_controller
     if current_user.role != "admin":
         raise HTTPException(status_code=403, detail="Only admins can choose who controls the room.")
     if payload.mode not in CONTROLLERS:
         raise HTTPException(status_code=422, detail="mode must be rules or learning.")
     if not MQTT_ENABLED:
         raise HTTPException(status_code=503, detail="MQTT is disabled on this server.")
+    if payload.mode == "learning":
+        try:
+            auth = await authorization(db, room_id)
+        except PyMongoError as exc:
+            raise HTTPException(status_code=503, detail="Database unavailable") from exc
+        if not auth["authorized"]:
+            raise HTTPException(status_code=409, detail=auth["reason"])
     try:
         ctl = await set_controller(db, room_id, payload.mode, current_user.username)
     except PyMongoError as exc:
@@ -968,6 +1028,28 @@ async def set_room_controller(
         ctl = await get_controller(db, room_id)
     logger.info("Controller of room %s set to %s by '%s'", room_id, payload.mode, current_user.username)
     return {"room_id": room_id, **ctl}
+
+
+def _hand_back_to_rules(room_id: str, by: str) -> None:
+    """Control was disabled: cancel a running learning order now, not when it expires.
+
+    control_sensor is sync (FastAPI runs it in a worker thread), so the async cancel
+    goes back to the event loop through anyio. If the broker is down the order still
+    expires on the node by itself.
+    """
+    import anyio.from_thread
+    from app.config import MQTT_ENABLED
+    from app.services.room_controller import _LAST_ACTION, cancel_learning_order
+
+    last = _LAST_ACTION.get(room_id)
+    if last:
+        last[1]["control_enabled"] = False     # the loop must not renew it before the next reading
+    if not MQTT_ENABLED:
+        return
+    try:
+        anyio.from_thread.run(cancel_learning_order, get_db(), room_id, by)
+    except Exception as exc:   # broker or Mongo down: the order expires on the node
+        logger.error("Could not cancel the learning order of %s: %s", room_id, exc)
 
 
 # ANTES: @router.put("/{sensor_id}/control")

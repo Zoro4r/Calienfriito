@@ -125,25 +125,57 @@ def occupancy_forecast(db_sql, room_id: str, reading_timestamp: datetime, minute
     return out
 
 
-async def log_forecast(db, room_id: str, ctrl: ForecastController) -> None:
-    """One document per decision (every 5 min): what the Aprendizaje tab draws and scores."""
+def reading_origin(reading: SensorReading, origin: str | None = None) -> str:
+    """Where a reading comes from: physical (declared by a node's firmware), simulated or unknown."""
+    if reading.is_simulated:
+        return "simulated"
+    return origin or "unknown"
+
+
+async def log_forecast(db, room_id: str, ctrl: ForecastController, data_origin: str = "unknown") -> None:
+    """One document per decision (every 5 min): what the Aprendizaje tab draws and scores.
+
+    `temp_now` (the minute mean the forecast starts from) lets forecast_quality pair this
+    forecast with the one logged HORIZON_MIN later, and scores the persistence baseline.
+    """
     at = datetime(1970, 1, 1) + timedelta(minutes=ctrl.last_decision)
     await db["forecast_log"].replace_one({"_id": f"{room_id}|{at:%Y-%m-%dT%H:%M}"}, {
         "_id": f"{room_id}|{at:%Y-%m-%dT%H:%M}", "room_id": room_id, "ts": at,
         "forecast_30": ctrl.forecast_c, "forecast_30_p90": ctrl.peak_p90_c, "fan_pct": ctrl.fan_pct,
         "model": getattr(ctrl.forecaster, "model_name", "persistencia"),
+        "temp_now": round(ctrl.history[-1], 2) if ctrl.history else None,
+        "data_origin": data_origin,
     }, upsert=True)
+
+
+def node_in_use(ns: dict, camera_occupancy: int | None = None) -> bool | None:
+    """Whether the node sees people, without reading it from its own actuator.
+
+    `ocupado` (newer firmware) or the camera count when present. Otherwise the firmware's
+    action, but only while no remote order runs: under an order the fan forces COOLING
+    and that action says nothing about people. None: unknown (the timetable decides).
+    """
+    if camera_occupancy is not None:
+        return camera_occupancy > 0
+    if isinstance(ns.get("ocupado"), bool):
+        return ns["ocupado"]
+    if ns.get("manual") or ns.get("autoridad") in ("manual", "predictivo"):
+        return None
+    return ns.get("accion") not in (None, "DISABLED")
 
 
 # One predictive controller per room, kept in memory and persisted in Mongo each minute.
 _SHADOW: dict[str, ForecastController] = {}
 
 
-async def shadow_learning_step(db, room_id: str, reading: SensorReading, db_sql=None, fan_type: str = "pwm_12v") -> dict | None:
+async def shadow_learning_step(db, room_id: str, reading: SensorReading, db_sql=None, fan_type: str = "pwm_12v",
+                               control_enabled: bool = True, data_origin: str = "unknown") -> dict | None:
     """Run the predictive controller in shadow on a node reading.
 
     The node's rules act; the controller forecasts the temperature and returns what it
     would do (start the fan early or not). None when the reading is not a node decision.
+    `control_enabled=False` (the room's device has control disabled): it still observes
+    and forecasts, but room_controller never turns the decision into an order.
     """
     ns = reading.node_state or {}
     if not ns.get("accion") or reading.temperature is None:
@@ -159,7 +191,7 @@ async def shadow_learning_step(db, room_id: str, reading: SensorReading, db_sql=
     if ctrl.closes_minute(ts_s):
         # A minute closes: the controller may forecast and decide, so tell it whether the
         # room is in use (the node sees people, or a class is on or starts within the horizon).
-        in_use = ns.get("accion") != "DISABLED"
+        in_use = node_in_use(ns, reading.camera_occupancy)
         if not in_use and db_sql is not None:
             timetable = await run_in_threadpool(occupancy_forecast, db_sql, room_id, ts, HORIZON_MIN)
             in_use = any(c for c, _ in timetable)
@@ -168,19 +200,24 @@ async def shadow_learning_step(db, room_id: str, reading: SensorReading, db_sql=
             ctrl.fan_pct = 100
         await db["forecast_state"].replace_one({"_id": room_id}, {"_id": room_id, **ctrl.to_state()}, upsert=True)
         if ctrl.last_decision != decided_before:
-            await log_forecast(db, room_id, ctrl)
+            await log_forecast(db, room_id, ctrl, data_origin)
     else:
         ctrl.step(ts_s, reading.temperature)
     summary = ctrl.summary()
     summary["fan_type"] = fan_type
+    summary["control_enabled"] = control_enabled
+    summary["co_alarm"] = bool(ns.get("alarma_co"))
     from app.services.room_controller import remember_action
     remember_action(room_id, ts, summary)
     return summary
 
 
 async def save_reading(db, reading: SensorReading, cognitive_action: dict | None = None,
-                       learning_action: dict | None = None) -> str:
+                       learning_action: dict | None = None, origin: str | None = None) -> str:
     doc = reading.model_dump()
+    # Provenance, written once with the reading and never recomputed: older documents
+    # lack it and read as "unknown".
+    doc["data_origin"] = reading_origin(reading, origin)
     # Always store naive UTC ISO string so MongoDB string comparison in $gte/$lte queries
     # works consistently regardless of whether the client sent a 'Z' or '+00:00' timestamp.
     doc["timestamp"] = reading.timestamp.replace(tzinfo=None).strftime("%Y-%m-%dT%H:%M:%S.%f")
@@ -198,7 +235,7 @@ async def save_reading(db, reading: SensorReading, cognitive_action: dict | None
     return str(result.inserted_id)
 
 
-async def process_reading(db, reading: SensorReading, db_sql=None) -> dict:
+async def process_reading(db, reading: SensorReading, db_sql=None, origin: str | None = None) -> dict:
     logger.info("Ingest reading sensor_id=%s", reading.sensor_id)
     anomaly = detect_anomaly(reading)
 
@@ -238,11 +275,14 @@ async def process_reading(db, reading: SensorReading, db_sql=None) -> dict:
     room_id = room_context.get("room_id") if isinstance(room_context, dict) else shadow_room
     if room_id and reading.node_state and reading.temperature is not None:
         try:
-            learning_action = await shadow_learning_step(db, room_id, reading, db_sql=db_sql, fan_type=fan_type)
+            learning_action = await shadow_learning_step(db, room_id, reading, db_sql=db_sql, fan_type=fan_type,
+                                                         control_enabled=shadow_room is None,
+                                                         data_origin=reading_origin(reading, origin))
         except Exception:   # the shadow controller must never block ingestion
             logger.exception("Learning shadow step failed for room %s", room_id)
 
-    inserted_id = await save_reading(db, reading, cognitive_action=cognitive_action, learning_action=learning_action)
+    inserted_id = await save_reading(db, reading, cognitive_action=cognitive_action, learning_action=learning_action,
+                                     origin=origin)
     logger.info(
         "Saved sensor_id=%s inserted_id=%s anomaly=%s room=%s ac=%s",
         reading.sensor_id, inserted_id, anomaly,

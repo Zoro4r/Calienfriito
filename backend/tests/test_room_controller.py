@@ -23,13 +23,23 @@ class FakeCollection:
     async def insert_one(self, doc):
         self.inserted.append(dict(doc))
 
-    def find(self, q):
+    def find(self, q, projection=None):
         items = [d for d in self.docs.values() if all(d.get(k) == v for k, v in q.items())]
+        return FakeCursor(items)
 
+
+class FakeCursor:
+    def __init__(self, items):
+        self.items = items
+
+    def __aiter__(self):
         async def gen():
-            for d in items:
+            for d in self.items:
                 yield d
         return gen()
+
+    async def to_list(self, length=None):
+        return list(self.items)
 
 
 class FakeDB(dict):
@@ -45,7 +55,12 @@ def sent(monkeypatch):
     async def publish(room_id, payload):
         out.append((room_id, payload))
     monkeypatch.setattr("app.services.mqtt_ingest.publish_command", publish)
+
+    async def gate_open(db, room_id, now=None):
+        return {"validated": True, "authorized": True, "reason": "ok"}
+    monkeypatch.setattr("app.services.forecast_quality.room_quality", gate_open)
     rc._LAST_ACTION.clear()
+    rc._FALLBACK.clear()
     return out
 
 

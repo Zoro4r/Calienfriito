@@ -38,7 +38,39 @@ NODE_STATE_FIELDS = (
     "bloqueo_s", "pendiente", "ciclo", "uptime_s", "co2_proxy", "manual", "manual_restante_s", "umbral_ocupacion",
     "ventilador_conectado", "calefactor_conectado", "buzzer_conectado",
     "ventilador_pwm_objetivo", "calefactor_objetivo", "buzzer_objetivo",
+    # Remote-order authority and acknowledgement (newer firmware), and the node's own
+    # occupancy reading, independent of the actuator it drives.
+    "ocupado", "autoridad", "comando_id", "comando_estado", "fallo_dht",
+    # prediccion_ventilador.ino contract, translated below to the fields above.
+    "ventilador_pct", "orden_restante_s", "calibracion_valida", "mq7_raw",
 )
+
+
+def unify_node_state(data: dict) -> dict:
+    """One node_state shape whichever firmware sent it.
+
+    prediccion_ventilador.ino reports `ventilador_pct`, `autoridad` and `orden_restante_s`
+    where nodo.ino.tmpl reports `ventilador_pwm` (0-255), `manual` and `manual_restante_s`.
+    The original fields are kept; the missing equivalents are filled in, never overwritten.
+    """
+    ns = {k: data[k] for k in NODE_STATE_FIELDS if k in data}
+    pct = ns.get("ventilador_pct")
+    if "ventilador_pwm" not in ns and isinstance(pct, (int, float)) and not isinstance(pct, bool):
+        ns["ventilador_pwm"] = round(max(0.0, min(100.0, float(pct))) * 255 / 100)
+    authority = ns.get("autoridad")
+    if "manual" not in ns and authority in ("local", "manual", "predictivo"):
+        ns["manual"] = authority != "local"
+    if "manual_restante_s" not in ns and "orden_restante_s" in ns:
+        ns["manual_restante_s"] = ns["orden_restante_s"]
+    return ns
+
+
+def declared_origin(data: dict) -> str:
+    """physical only when the firmware itself says `is_simulated: false`; unknown when it says nothing."""
+    flag = data.get("is_simulated")
+    if flag is True:
+        return "simulated"
+    return "physical" if flag is False else "unknown"
 
 # Node connectivity (RF-10), from ccs/<room>/status: "online" on connect and the
 # retained Last Will "offline" the broker publishes when the node stops answering.
@@ -173,7 +205,7 @@ def telemetry_to_reading(topic: str, payload: bytes | str, camera_occupancy: int
             ina_power_mw=optional_ina("ina_power_mw"),
             camera_occupancy=(camera_occupancy if camera_occupancy is not None else latest_camera_occupancy(parts[1])),
             is_simulated=bool(data.get("is_simulated", False)),
-            node_state={k: data[k] for k in NODE_STATE_FIELDS if k in data},
+            node_state=unify_node_state(data),
         )
     except (TypeError, ValueError, ValidationError) as exc:
         logger.warning("MQTT: invalid telemetry on %s: %s", topic, exc)
@@ -184,13 +216,17 @@ async def _ingest(topic: str, payload: bytes) -> None:
     reading = telemetry_to_reading(topic, payload)
     if reading is None:
         return
+    try:
+        origin = declared_origin(json.loads(payload))
+    except (TypeError, ValueError):
+        origin = "unknown"
     from app.database import get_db
     from app.database_sql import SessionLocal
     from app.services.data_service import process_reading
 
     db_sql = SessionLocal()
     try:
-        result = await process_reading(get_db(), reading, db_sql=db_sql)
+        result = await process_reading(get_db(), reading, db_sql=db_sql, origin=origin)
         room = result.get("room_context") if isinstance(result, dict) else None
         if room and reading.node_state:
             from app.services.smart_plug import sync_from_telemetry
