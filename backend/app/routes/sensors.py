@@ -70,7 +70,8 @@ class SensorReadingOut(BaseModel):
     temperature: Optional[float] = None
     humidity: Optional[float] = None
     co2_ppm: Optional[float] = None
-    co_ppm: float = 0.0
+    # None when the reading came without a CO sensor (HTTP readings); MQTT stores 0.0.
+    co_ppm: Optional[float] = None
     ina_voltage_v: Optional[float] = None
     ina_current_ma: Optional[float] = None
     ina_power_mw: Optional[float] = None
