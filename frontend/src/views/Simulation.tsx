@@ -173,6 +173,7 @@ export default function Simulation() {
   const [node, setNode] = useState<NodeState | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [physical, setPhysical] = useState(false)   // the room's real node is answering
+  const nodeHoldUntil = useRef(0)                    // end of the physical node's hysteresis wait
   const sent = useRef(false)
 
   useEffect(() => {
@@ -191,7 +192,15 @@ export default function Simulation() {
       room_id: room, temperature: dht ? params.temp : null, humidity: dht ? humidityOf(params.people) : null,
       co2_ppm: co2Of(params.people), co_ppm: params.co ? 80 : 1, manual: params.mode === 'manual',
       hold_s: holdS, hold_temperature: holdS ? HOLD_FROM_C : null,
-    }).then(r => { setNode(r.data.node_state); setPhysical(!!r.data.physical); setError(null); sent.current = true })
+    }).then(r => {
+      // The node reports its wait every ~2 s: keep one deadline (move it only on a real change)
+      // so the countdown on screen goes down one second at a time.
+      const lock = r.data.node_state?.bloqueo_s ?? 0
+      const until = lock ? Date.now() + lock * 1000 : 0
+      if (!until) nodeHoldUntil.current = 0
+      else if (Math.abs(until - nodeHoldUntil.current) > 2500) nodeHoldUntil.current = until
+      setNode(r.data.node_state); setPhysical(!!r.data.physical); setError(null); sent.current = true
+    })
       .catch(err => {
         // A server restart (502/503) or a network blip: keep the scenario and retry on the next send.
         const status = err?.response?.status as number | undefined
@@ -211,6 +220,14 @@ export default function Simulation() {
     const end = left > 0 ? setTimeout(() => send(p, roomId), left + 200) : undefined
     return () => { clearInterval(t); clearInterval(tick); clearTimeout(end) }
   }, [active, p, roomId, send, physical])
+
+  // Physical node waiting out its hysteresis: tick every second for the countdown.
+  const nodeLock = physical && !!node?.bloqueo_s
+  useEffect(() => {
+    if (!nodeLock) return
+    const t = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(t)
+  }, [nodeLock])
 
   // Leaving the page puts the rooms back to normal.
   useEffect(() => () => { if (sent.current) api.delete('/sensors/demo').catch(() => {}) }, [])
@@ -232,7 +249,7 @@ export default function Simulation() {
 
   const preset = PRESETS.find(x => x.p.people === p.people && x.p.temp === p.temp && x.p.co === p.co && x.p.mode === p.mode)
   // The physical node runs its own hysteresis: its countdown is the one it reports.
-  const holdLeft = physical ? node?.bloqueo_s ?? 0 : Math.max(0, Math.ceil((holdUntil.current - now) / 1000))
+  const holdLeft = Math.max(0, Math.ceil(((physical ? nodeHoldUntil.current : holdUntil.current) - now) / 1000))
   const info = node && active ? explain(node, p, holdLeft) : null
   const led = LED[ledKey(node?.led)]
 
