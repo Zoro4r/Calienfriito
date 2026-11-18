@@ -225,6 +225,7 @@ const char* TOPIC_TELEMETRY = "ccs/" AULA "/telemetry";
 const char* TOPIC_STATUS    = "ccs/" AULA "/status";
 const char* TOPIC_CMD       = "ccs/" AULA "/command";
 const char* TOPIC_CONFIG    = "ccs/" AULA "/config"; // umbrales, retenido (lo lee el monitor del nodo)
+const char* TOPIC_SIM       = "ccs/" AULA "/sim";    // lecturas simuladas desde el dashboard (pagina Simulacion)
 const char* CLIENT_ID_BASE  = "ccs-" AULA "-nodo";
 const unsigned long WIFI_TIMEOUT_MS = 10000UL;
 // Reconexion MQTT cada 5 s fijos (MIN = MAX). Para volver a una espera creciente (RF-11)
@@ -285,6 +286,16 @@ char comandoId[16] = "";           // id de la ultima orden recibida (eco en la 
 const char* comandoEstado = "";    // aplicado | rechazado | vencido
 int fallosDHT = 0;                 // lecturas invalidas seguidas del DHT
 bool ocupadoActual = false;        // lectura propia del MQ-135, independiente de la accion
+
+// Simulacion desde el dashboard: mientras llegan mensajes a TOPIC_SIM, el nodo usa esos
+// valores en lugar de sus sensores y decide con sus mismas reglas (los actuadores responden).
+// Si deja de recibirlos SIM_TIMEOUT_MS (pagina cerrada, sin red), vuelve a sus sensores.
+const unsigned long SIM_TIMEOUT_MS = 15000UL;
+bool simActiva = false;
+unsigned long simHastaMs = 0;
+float simTempC = 24.0, simHumedad = 55.0;
+int simMq135 = 0, simCoPpm = 0;
+bool simDhtOk = true;
 
 // ------------------------------- Log -----------------------------------------
 // Toda linea termina en "\r\n" (como Serial.println). Con "\n" solo, la Wokwi
@@ -552,9 +563,27 @@ String valorJson(const String& json, const char* clave) {
 // Comando del dashboard (RF-26). Llega retenido: tras un reinicio el nodo recupera
 // el ultimo comando (RF-12). Si trae expira_utc y el reloj NTP es valido, solo aplica
 // el tiempo que le queda; si ya vencio, lo rechaza (no revive una orden antigua).
+// Lecturas simuladas: {"t":25.2,"h":59,"mq135":2431,"co":1,"dht":true} o {"fin":true}.
+void aplicarSimulacion(const String& msg) {
+  if (msg.length() == 0 || valorJson(msg, "fin") == "true") {
+    if (simActiva) LOG("EVT", "Simulacion terminada: vuelven los sensores reales");
+    simActiva = false;
+    return;
+  }
+  simDhtOk = valorJson(msg, "dht") != "false";
+  simTempC = valorJson(msg, "t").toFloat();
+  simHumedad = valorJson(msg, "h").toFloat();
+  simMq135 = constrain(valorJson(msg, "mq135").toInt(), 0, 4095);
+  simCoPpm = constrain(valorJson(msg, "co").toInt(), 0, 1000);
+  if (!simActiva) LOG("EVT", "Simulacion desde el dashboard: el nodo usa las lecturas recibidas");
+  simActiva = true;
+  simHastaMs = millis() + SIM_TIMEOUT_MS;
+}
+
 void onMqttMessage(char* topic, byte* payload, unsigned int length) {
   String msg;
   for (unsigned int i = 0; i < length; i++) msg += (char)payload[i];
+  if (strcmp(topic, TOPIC_SIM) == 0) { aplicarSimulacion(msg); return; }
   LOG("RED", "Comando recibido en %s: %s", topic, msg.c_str());
 
   String modo = valorJson(msg, "modo");
@@ -662,6 +691,7 @@ void intentarMQTT() {
     mqttEsperaMs = mqttProximaEsperaMs = MQTT_RETRY_MIN_MS;
     mqtt.publish(TOPIC_STATUS, "online", true);
     mqtt.subscribe(TOPIC_CMD, 1);
+    mqtt.subscribe(TOPIC_SIM, 0);
     publicarConfig();
     LOG("RED", "MQTT conectado a %s:%d | cliente %s", MQTT_HOST, MQTT_PORT, clientId.c_str());
     LOG("RED", "Publica en %s | suscrito a %s", TOPIC_TELEMETRY, TOPIC_CMD);
@@ -725,13 +755,15 @@ void publicarTelemetria(bool dhtOk, float tempC, float humedad, int mq135, int m
     "\"co_ppm\":%d,\"accion\":\"%s\",\"alarma_co\":%s,\"ventilador_pwm\":%d,\"ventilador_rpm\":%d,"
     "\"calefactor\":%s,\"buzzer\":%s,\"led\":\"%s\",\"motivo\":\"%s\","
     "\"bloqueo_s\":%lu,\"pendiente\":\"%s\",\"manual\":%s,\"manual_restante_s\":%lu,\"is_simulated\":%s%s,"
+    "\"umbral_ocupacion\":%d,\"simulacion\":%s,"
     "\"ocupado\":%s,\"autoridad\":\"%s\",\"comando_id\":\"%s\",\"comando_estado\":\"%s\",\"fallo_dht\":%s}",
     numeroCiclo, millis() / 1000.0, temp, hum, mq135, co2ppm, mq7ppm, nombreAccion(accionActual),
     alarmaCO ? "true" : "false", dutyVentilador, rpmVentilador,
     calefactorEncendido ? "true" : "false", buzzerEncendido ? "true" : "false",
     colorLed, motivo, bloqueoSegundos, bloqueoSegundos ? nombreAccion(accionPendiente) : "",
     manualActivo ? "true" : "false", manualActivo ? (manualHastaMs - millis() + 999) / 1000 : 0UL,
-    TELEMETRIA_SIMULADA ? "true" : "false", inaJson,
+    TELEMETRIA_SIMULADA || simActiva ? "true" : "false", inaJson,
+    OCCUPANCY_ADC_THRESHOLD, simActiva ? "true" : "false",
     ocupadoActual ? "true" : "false", manualActivo ? (ordenPredictiva ? "predictivo" : "manual") : "local",
     comandoId, comandoEstado, fallosDHT >= DHT_FALLOS_SEGURO ? "true" : "false");
   if (n < 0 || n >= (int)sizeof(buf)) {
@@ -896,10 +928,21 @@ void loop() {
   int mq7ppm = map(mq7Raw, 0, 4095, 0, 150);   // mapeo SIMPLIFICADO para simular;
                                                // en hardware real usar la curva
                                                // de calibracion del MQ-7
-  bool ocupado = mq135 >= OCCUPANCY_ADC_THRESHOLD;
-  ocupadoActual = ocupado;
   float tempC   = dht.readTemperature();
   float humedad = dht.readHumidity();
+  // Simulacion desde el dashboard: reemplaza las lecturas (las reglas no cambian).
+  if (simActiva && (long)(millis() - simHastaMs) >= 0) {
+    simActiva = false;
+    LOG("EVT", "Simulacion sin mensajes por %lu s: vuelven los sensores reales", SIM_TIMEOUT_MS / 1000);
+  }
+  if (simActiva) {
+    mq135 = simMq135;
+    mq7ppm = simCoPpm;
+    tempC = simDhtOk ? simTempC : NAN;
+    humedad = simDhtOk ? simHumedad : NAN;
+  }
+  bool ocupado = mq135 >= OCCUPANCY_ADC_THRESHOLD;
+  ocupadoActual = ocupado;
   bool dhtOk = !isnan(tempC) && !isnan(humedad);
   fallosDHT = dhtOk ? 0 : min(fallosDHT + 1, 1000);
 
