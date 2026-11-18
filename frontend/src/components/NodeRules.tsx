@@ -4,14 +4,14 @@ import api, { getApiErrorDetail } from '../api/client'
 import { useAuth } from '../context/AuthContext'
 import type { StoredReading } from '../types'
 import ControllerPanel from './ControllerPanel'
-import { FW, occupiedAt } from './NodeLive'
+import { FW, adcToPpm, isOccupied, occupiedPpmAt, ppmToAdc } from './NodeLive'
 import { NUM_INPUT_MODS } from '../utils/formStyles'
 
 // "Configuración" of a room with a node: the node's occupancy threshold (adjustable from here,
 // no reflashing) and who drives the actuators, with the firmware rules shown in its card.
 
 // Firmware maps the MQ-135 ADC (0-4095) linearly to 400-2000 ppm.
-export const OCCUPIED_PPM = Math.round(400 + FW.occupiedAdc * 1600 / 4095)
+export const OCCUPIED_PPM = adcToPpm(FW.occupiedAdc)
 
 const POLL_MS = 3_000
 // Changing the threshold needs the new node firmware, still being validated on hardware.
@@ -42,17 +42,19 @@ function OccupancyThreshold({ roomId, sensorId }: { roomId: string; sensorId?: s
 
   const ns = reading?.node_state
   const reported = ns?.umbral_ocupacion != null   // false: firmware too old to report or accept it
-  const current = reading ? occupiedAt(ns, reading.is_simulated) : undefined
-  const adc = ns?.co2_proxy
-  const applied = sent != null && current === sent
+  // Shown in ppm; the node keeps its threshold in ADC, so the value sent is converted back.
+  const current = reading ? occupiedPpmAt(ns, reading.is_simulated) : undefined
+  const ppm = reading?.co2_ppm ?? null
+  const occupied = current != null ? isOccupied(ns, ppm, current) : null
+  const applied = sent != null && ns?.umbral_ocupacion === ppmToAdc(sent)
   const n = Number(value)
-  const valid = value !== '' && Number.isInteger(n) && n >= 1 && n <= 4095
+  const valid = value !== '' && Number.isInteger(n) && n > 400 && n <= 2000
 
   async function save() {
     if (!valid) return
     setBusy(true); setErr(null)
     try {
-      await api.put(`/sensors/rooms/${encodeURIComponent(roomId)}/node-settings`, { umbral_ocupacion: n })
+      await api.put(`/sensors/rooms/${encodeURIComponent(roomId)}/node-settings`, { umbral_ocupacion: ppmToAdc(n) })
       setSent(n); setValue('')
     } catch (e) {
       setErr(getApiErrorDetail(e) ?? 'No se pudo enviar el umbral.')
@@ -66,16 +68,16 @@ function OccupancyThreshold({ roomId, sensorId }: { roomId: string; sensorId?: s
       </header>
       <div className="flex flex-wrap items-center gap-x-8 gap-y-3 px-5 py-3.5 text-sm">
         <span className="min-w-0 flex-1 text-slate-400">
-          Desde este valor del MQ-135 el aula cuenta como ocupada.
+          Desde este nivel de CO₂ (MQ-135) el aula cuenta como ocupada.
           {CAN_SET_THRESHOLD ? '' : ' Por ahora se cambia en el programa del ESP32.'}
         </span>
-        <span className="flex items-baseline gap-2"><span className="text-xs text-slate-500">Umbral</span><span className="text-xl font-semibold text-white">{current ?? '—'}</span></span>
-        <span className="flex items-baseline gap-2"><span className="text-xs text-slate-500">Ahora</span><span className="text-xl font-semibold text-white">{adc ?? '—'}</span>
-          {adc != null && current != null && <span className="flex items-center gap-1.5 text-xs text-slate-400"><span className={`h-1.5 w-1.5 rounded-full ${adc >= current ? 'bg-emerald-400' : 'bg-slate-500'}`} />{adc >= current ? 'ocupada' : 'vacía'}</span>}
+        <span className="flex items-baseline gap-2"><span className="text-xs text-slate-500">Umbral</span><span className="text-xl font-semibold text-white">{current ?? '—'}</span><span className="text-xs text-slate-500">ppm</span></span>
+        <span className="flex items-baseline gap-2"><span className="text-xs text-slate-500">Ahora</span><span className="text-xl font-semibold text-white">{ppm != null ? Math.round(ppm) : '—'}</span><span className="text-xs text-slate-500">ppm</span>
+          {occupied != null && <span className="flex items-center gap-1.5 text-xs text-slate-400"><span className={`h-1.5 w-1.5 rounded-full ${occupied ? 'bg-emerald-400' : 'bg-slate-500'}`} />{occupied ? 'ocupada' : 'vacía'}</span>}
         </span>
         {canEdit && reported && (
           <form className="flex items-center gap-2" onSubmit={e => { e.preventDefault(); save() }}>
-            <input className={`field w-28 ${NUM_INPUT_MODS}`} type="number" min={1} max={4095} value={value} onChange={e => setValue(e.target.value)} placeholder={String(current)} aria-label="Nuevo umbral (1 a 4095)" />
+            <input className={`field w-28 ${NUM_INPUT_MODS}`} type="number" min={401} max={2000} value={value} onChange={e => setValue(e.target.value)} placeholder={String(current)} aria-label="Nuevo umbral en ppm (401 a 2000)" />
             <button type="submit" className="btn btn-primary" disabled={busy || !valid}>{busy && <RefreshCw size={14} className="animate-spin" />} Aplicar</button>
           </form>
         )}
@@ -83,7 +85,7 @@ function OccupancyThreshold({ roomId, sensorId }: { roomId: string; sensorId?: s
       {sent != null && (
         <p className="flex items-center gap-2 border-t border-slate-800 px-5 py-2.5 text-xs text-slate-400">
           <span className={`h-1.5 w-1.5 rounded-full ${applied ? 'bg-emerald-400' : 'bg-slate-500'}`} />
-          {applied ? `El nodo ya usa ${sent}.` : `Enviado ${sent}: esperando que el nodo lo confirme…`}
+          {applied ? `El nodo ya usa ${sent} ppm.` : `Enviado ${sent} ppm: esperando que el nodo lo confirme…`}
         </p>
       )}
       {CAN_SET_THRESHOLD && reading && !reported && (

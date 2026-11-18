@@ -59,8 +59,17 @@ export const coBand = (co: number): Band =>
 // does not report it yet, the default of the physical node (real data) or of the Wokwi simulation.
 export const occupiedAt = (ns: { umbral_ocupacion?: number } | null | undefined, simulated?: boolean) =>
   ns?.umbral_ocupacion ?? (simulated ? FW.occupiedAdc : FW.nodeOccupiedAdc)
-export const occBand = (adc: number, threshold: number = FW.occupiedAdc): Band =>
-  adc >= threshold ? { text: `Aula ocupada (≥ ${threshold})`, tone: 'ok' } : { text: `Aula vacía (< ${threshold})`, tone: 'muted' }
+// The firmware maps the MQ-135 ADC (0-4095) linearly to 400-2000 ppm (CO2_PPM_MIN/MAX):
+// the dashboard shows CO₂ in ppm and converts the node's ADC threshold to the same scale.
+export const adcToPpm = (adc: number) => Math.round(400 + adc * 1600 / 4095)
+export const ppmToAdc = (ppm: number) => Math.round((ppm - 400) * 4095 / 1600)
+export const occupiedPpmAt = (ns: { umbral_ocupacion?: number } | null | undefined, simulated?: boolean) =>
+  adcToPpm(occupiedAt(ns, simulated))
+// Occupied as the node decided it (with its own hysteresis) when it reports it; otherwise by threshold.
+export const isOccupied = (ns: { ocupado?: boolean } | null | undefined, ppm: number | null | undefined, thresholdPpm: number) =>
+  ns?.ocupado ?? (ppm == null ? null : ppm >= thresholdPpm)
+export const occBand = (occupied: boolean, thresholdPpm: number): Band =>
+  occupied ? { text: `Aula ocupada (≥ ${thresholdPpm} ppm)`, tone: 'ok' } : { text: `Aula vacía (< ${thresholdPpm} ppm)`, tone: 'muted' }
 
 // Dot colours for wrapped status text (same as StatusText).
 const TONE_DOT_CLASS: Record<Tone, string> = {
@@ -147,7 +156,7 @@ export function NodeStatusCard({ node, className = '' }: { node: NodeState | nul
 }
 
 // ── History ───────────────────────────────────────────────────────────────────
-export interface Point { t: number; temperature: number | null; humidity: number | null; co: number | null; co2: number | null; adc: number | null; state: string | null }
+export interface Point { t: number; temperature: number | null; humidity: number | null; co: number | null; co2: number | null; state: string | null }
 
 export const AXIS = { stroke: '#475569', tick: { fontSize: 10, fill: '#94a3b8' } }
 export const tick = (ms: number) => new Date(ms).toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit', second: '2-digit' })

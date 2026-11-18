@@ -70,6 +70,7 @@ export interface NodeState {
   uptime_s?: number
   co2_proxy?: number
   umbral_ocupacion?: number   // MQ-135 ADC from which the node counts the room as occupied (set from the dashboard)
+  ocupado?: boolean           // occupancy as the node decided it (newer firmware, with hysteresis)
 }
 
 // Flat reading document as returned by GET /sensors/.

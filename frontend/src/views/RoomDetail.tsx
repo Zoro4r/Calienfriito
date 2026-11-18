@@ -13,7 +13,7 @@ import RoomInfra from '../components/RoomInfra'
 import RoomWeek from '../components/RoomWeek'
 import {
   NodeStatusCard, FW, LiveChart, Panel, SensorCard, stateKey, niceAxis,
-  coBand, humBand, occBand, occupiedAt, tempBand, type Point,
+  coBand, humBand, occBand, occupiedPpmAt, isOccupied, tempBand, type Point,
 } from '../components/NodeLive'
 import { useNodes } from '../hooks/useNodes'
 import { levelTemp, levelCO2, levelCO, getStatusLabel } from '../utils/sensorColors'
@@ -243,7 +243,7 @@ export default function RoomDetail() {
     const inWin = asc.filter(r => parseUtc(r.timestamp).getTime() >= from)
     const points: Point[] = inWin.map(r => ({
       t: parseUtc(r.timestamp).getTime(), temperature: r.temperature, humidity: r.humidity,
-      co: r.co_ppm, co2: r.co2_ppm, adc: r.node_state?.co2_proxy ?? null, state: stateKey(r.node_state),
+      co: r.co_ppm, co2: r.co2_ppm, state: stateKey(r.node_state),
     }))
     return { inWin, points }
   }, [readings, win])
@@ -266,7 +266,8 @@ export default function RoomDetail() {
 
   const name = room ? (room.name.startsWith(room.id) ? room.name.slice(room.id.length).trim() : room.name) : ''
   const nodeState = latest?.node_state
-  const occupiedThreshold = occupiedAt(nodeState, latest?.is_simulated)
+  const occupiedThreshold = occupiedPpmAt(nodeState, latest?.is_simulated)
+  const occupiedNow = isOccupied(nodeState, latest?.co2_ppm, occupiedThreshold)
   const lastNodeReading = readings.find(r => r.node_state?.accion) ?? null
   const nodeMessage = id && nodes[id] && !nodes[id].online
     ? `Nodo desconectado: sin decisiones ${lastNodeReading ? `desde ${timeAgo(lastNodeReading.timestamp, now)}` : 'registradas'}.`
@@ -368,8 +369,8 @@ export default function RoomDetail() {
             <SensorCard label="Humedad" value={fmt(latest?.humidity, 0)} unit="%" band={latest?.humidity == null ? (latest ? { text: 'Sin lectura del sensor DHT', tone: 'warn' } : null) : humBand(latest.humidity)} />
             <SensorCard label="CO (MQ-7)" value={fmt(latest?.co_ppm, 0)} unit="ppm" band={latest ? coBand(latest.co_ppm ?? 0) : null} />
             {hasNode
-              ? <SensorCard label="Ocupación (MQ-135)" value={nodeState?.co2_proxy != null ? String(nodeState.co2_proxy) : '—'} unit="ADC"
-                  band={nodeState?.co2_proxy != null ? occBand(nodeState.co2_proxy, occupiedThreshold) : null} />
+              ? <SensorCard label="CO₂ (MQ-135)" value={fmt(latest?.co2_ppm, 0)} unit="ppm"
+                  band={occupiedNow != null ? occBand(occupiedNow, occupiedThreshold) : null} />
               : <SensorCard label="Ocupación estimada" value={fmt(action?.actual_occupancy, 0)} unit={`/ ${room?.max_capacity ?? '—'}`}
                   band={latest ? { text: `CO₂ ${fmt(latest.co2_ppm, 0)} ppm`, tone: LEVEL_TONE[levelCO2(latest.co2_ppm ?? 0)] } : null} />}
             </div>
@@ -412,9 +413,9 @@ export default function RoomDetail() {
               axis={niceAxis(live_.points.map(p => p.co ?? 0), [0, 100], 50)}
               refs={[{ y: FW.coAlarm, label: `Alarma ${FW.coAlarm} ppm`, color: '#f87171' }]} />
             {hasNode
-              ? <LiveChart title="MQ-135 (ADC 0–4095)" data={live_.points} dataKey="adc" unit="ADC"
-                  axis={{ domain: [0, 4095], ticks: [0, 2000, 4095] }}
-                  refs={[{ y: occupiedThreshold, label: `Ocupada ≥ ${occupiedThreshold}`, color: '#94a3b8' }]} />
+              ? <LiveChart title="CO₂ (ppm) · MQ-135" data={live_.points} dataKey="co2" unit="ppm"
+                  axis={niceAxis([...live_.points.map(p => p.co2 ?? 400), occupiedThreshold], [400, 800], 200)}
+                  refs={[{ y: occupiedThreshold, label: `Ocupada ≥ ${occupiedThreshold} ppm`, color: '#94a3b8' }]} />
               : <LiveChart title="CO₂ (ppm)" data={live_.points} dataKey="co2" unit="ppm"
                   axis={niceAxis(live_.points.map(p => p.co2 ?? 0), [400, 1600], 400)}
                   refs={[{ y: 800, label: 'atención', color: '#fbbf24' }]} />}
