@@ -15,23 +15,32 @@ const SEND_EVERY_MS = 5_000
 const co2Of = (people: number) => 450 + people * 30            // ppm the class breathes out
 const humidityOf = (people: number) => Math.round(50 + people * 0.3)
 
-interface Params { people: number; temp: number; co: boolean }
+// mode: 'hold' = a change asked before the node's 60 s minimum (it keeps the previous state),
+// 'manual' = an order from the dashboard, 'dht' = the DHT stopped answering.
+type Mode = 'auto' | 'hold' | 'manual' | 'dht'
+interface Params { people: number; temp: number; co: boolean; mode: Mode }
 
+const HOLD_S = FW.minOnS
+const HOLD_FROM_C = 25.2   // "Calor con gente": the state the node keeps during the hold
+
+// The six scenarios of the lab presentation, in its order.
 const PRESETS: { label: string; p: Params }[] = [
-  { label: 'Aula vacía', p: { people: 0, temp: 23.8, co: false } },
-  { label: 'Clase tranquila', p: { people: 30, temp: 24.0, co: false } },
-  { label: 'Está tibio', p: { people: 30, temp: 24.8, co: false } },
-  { label: 'Hace calor', p: { people: 30, temp: 25.8, co: false } },
-  { label: 'Aire cargado', p: { people: 40, temp: 24.4, co: false } },
-  { label: 'Mañana fría', p: { people: 30, temp: 22.5, co: false } },
-  { label: 'Fuga de CO', p: { people: 30, temp: 24.2, co: true } },
+  { label: 'Aula vacía', p: { people: 0, temp: 24.0, co: false, mode: 'auto' } },
+  { label: 'Calor con gente', p: { people: 30, temp: HOLD_FROM_C, co: false, mode: 'auto' } },
+  { label: 'Cambio brusco', p: { people: 30, temp: 23.8, co: false, mode: 'hold' } },
+  { label: 'Orden manual', p: { people: 30, temp: 24.0, co: false, mode: 'manual' } },
+  { label: 'Monóxido', p: { people: 30, temp: 24.2, co: true, mode: 'auto' } },
+  { label: 'Sensor caído', p: { people: 30, temp: 24.0, co: false, mode: 'dht' } },
 ]
 const PEOPLE = [0, 15, 30, 40]
 const LED: Record<string, string> = { AZUL: '#3b82f6', VERDE: '#22c55e', ROJO: '#ef4444', AMBAR: '#f59e0b', APAGADO: '#334155' }
 
 // The node's answer in plain words.
-function explain(n: NodeState, p: Params): { state: string; why: string } {
+function explain(n: NodeState, p: Params, holdLeft: number): { state: string; why: string } {
   if (n.alarma_co) return { state: 'Alarma de CO', why: 'hay CO en el aire' }
+  if (n.fallo_dht) return { state: 'En espera', why: 'el DHT no responde: el nodo pasa a estado seguro' }
+  if (n.manual) return { state: 'Orden manual', why: 'llegó una orden desde el dashboard' }
+  if (n.bloqueo_s) return { state: 'Mantiene el estado', why: `el cambio llegó antes de ${HOLD_S} s: cambia en ${holdLeft} s` }
   if (n.accion === 'DISABLED') return { state: 'Aula vacía', why: 'casi no hay CO₂: no hay clase' }
   if (n.accion === 'HEATING') return { state: 'Calentando', why: `hace frío (bajo ${FW.heatOn} °C)` }
   if (n.accion === 'COOLING') {
@@ -56,7 +65,8 @@ function Classroom({ p, node }: { p: Params; node: NodeState | null }) {
   const dots = Math.max(0, Math.round((co2 - 450) / 70))
   const shown = Math.min(24, Math.round(p.people / 2))
   const fanDur = fanPct >= 100 ? 0.45 : fanPct >= 75 ? 0.8 : 1.4
-  const thermo = Math.min(100, Math.max(0, ((p.temp - 20) / 8) * 100))
+  const noTemp = !!node?.fallo_dht
+  const thermo = noTemp ? 0 : Math.min(100, Math.max(0, ((p.temp - 20) / 8) * 100))
   return (
     <section className="surface relative min-h-[26rem] overflow-hidden bg-[#0b1222]" aria-label="Aula simulada">
       <div className="absolute inset-10 rounded-md border-2 border-slate-800" />
@@ -82,7 +92,7 @@ function Classroom({ p, node }: { p: Params; node: NodeState | null }) {
         <div className={`absolute inset-x-0 bottom-0 transition-[height] duration-500 ${p.temp >= FW.fan100At ? 'bg-amber-400' : p.temp < FW.heatOn ? 'bg-sky-400' : 'bg-slate-400'}`}
           style={{ height: `${thermo}%` }} />
       </div>
-      <span className="absolute left-[96px] top-[150px] text-xs tabular-nums text-slate-400">{p.temp.toFixed(1)} °C</span>
+      <span className="absolute left-[96px] top-[150px] text-xs tabular-nums text-slate-400">{noTemp ? 'DHT sin lectura' : `${p.temp.toFixed(1)} °C`}</span>
 
       {/* Fan on the right wall, with air leaving while it runs */}
       <div className="absolute right-12 top-[120px] flex items-center">
@@ -153,6 +163,8 @@ export default function Simulation() {
   const [rooms, setRooms] = useState<Room[]>([])
   const [roomId, setRoomId] = useState('')
   const [p, setP] = useState<Params>(PRESETS[1].p)
+  const holdUntil = useRef(0)
+  const [now, setNow] = useState(Date.now())
   const [active, setActive] = useState(false)
   const [node, setNode] = useState<NodeState | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -168,9 +180,12 @@ export default function Simulation() {
 
   const send = useCallback((params: Params, room: string) => {
     if (!room) return
+    const dht = params.mode !== 'dht'
+    const holdS = params.mode === 'hold' ? Math.max(0, Math.ceil((holdUntil.current - Date.now()) / 1000)) : 0
     api.post<{ node_state: NodeState }>('/sensors/demo', {
-      room_id: room, temperature: params.temp, humidity: humidityOf(params.people),
-      co2_ppm: co2Of(params.people), co_ppm: params.co ? 80 : 1,
+      room_id: room, temperature: dht ? params.temp : null, humidity: dht ? humidityOf(params.people) : null,
+      co2_ppm: co2Of(params.people), co_ppm: params.co ? 80 : 1, manual: params.mode === 'manual',
+      hold_s: holdS, hold_temperature: holdS ? HOLD_FROM_C : null,
     }).then(r => { setNode(r.data.node_state); setError(null); sent.current = true })
       .catch(err => { setError(getApiErrorDetail(err) ?? 'No se pudo enviar la lectura.'); setActive(false) })
   }, [])
@@ -180,13 +195,22 @@ export default function Simulation() {
     if (!active) return
     send(p, roomId)
     const t = setInterval(() => send(p, roomId), SEND_EVERY_MS)
-    return () => clearInterval(t)
+    // During a hold: a countdown, and the change sent right when it ends.
+    const left = p.mode === 'hold' ? holdUntil.current - Date.now() : 0
+    const tick = left > 0 ? setInterval(() => setNow(Date.now()), 1000) : undefined
+    const end = left > 0 ? setTimeout(() => send(p, roomId), left + 200) : undefined
+    return () => { clearInterval(t); clearInterval(tick); clearTimeout(end) }
   }, [active, p, roomId, send])
 
   // Leaving the page puts the rooms back to normal.
   useEffect(() => () => { if (sent.current) api.delete('/sensors/demo').catch(() => {}) }, [])
 
-  const apply = (next: Params) => { setP(next); setActive(true) }
+  const apply = (next: Params) => {
+    if (next.mode === 'hold') { holdUntil.current = Date.now() + HOLD_S * 1000; setNow(Date.now()) }
+    setP({ ...next }); setActive(true)
+  }
+  // Adjusting a value by hand leaves the special scenarios.
+  const adjust = (change: Partial<Params>) => apply({ ...p, ...change, mode: 'auto' })
   const reset = () => {
     setActive(false); setNode(null)
     api.delete('/sensors/demo').then(() => { sent.current = false }).catch(() => {})
@@ -196,8 +220,9 @@ export default function Simulation() {
     setRoomId(id)
   }
 
-  const preset = PRESETS.find(x => x.p.people === p.people && x.p.temp === p.temp && x.p.co === p.co)
-  const info = node ? explain(node, p) : null
+  const preset = PRESETS.find(x => x.p.people === p.people && x.p.temp === p.temp && x.p.co === p.co && x.p.mode === p.mode)
+  const holdLeft = Math.max(0, Math.ceil((holdUntil.current - now) / 1000))
+  const info = node ? explain(node, p, holdLeft) : null
   const led = LED[node?.led ?? 'APAGADO'] ?? LED.APAGADO
 
   return (
@@ -236,7 +261,7 @@ export default function Simulation() {
             <span className="text-sm text-slate-300">Personas en el aula</span>
             <div className="grid grid-cols-4 gap-1.5">
               {PEOPLE.map(n => (
-                <button key={n} type="button" onClick={() => apply({ ...p, people: n })} aria-pressed={p.people === n}
+                <button key={n} type="button" onClick={() => adjust({ people: n })} aria-pressed={p.people === n}
                   className={`h-9 rounded-lg border text-sm ${p.people === n ? 'border-slate-500 bg-slate-800 text-white' : 'border-slate-800 text-slate-400 hover:border-slate-600'}`}>{n}</button>
               ))}
             </div>
@@ -247,16 +272,16 @@ export default function Simulation() {
             <span className="text-sm text-slate-300">Temperatura</span>
             <div className="flex items-center gap-2.5">
               <button type="button" className="btn btn-secondary h-10 w-10 justify-center px-0" aria-label="Bajar temperatura"
-                onClick={() => apply({ ...p, temp: Math.max(20, +(p.temp - 0.5).toFixed(1)) })}><Minus size={16} /></button>
+                onClick={() => adjust({ temp: Math.max(20, +(p.temp - 0.5).toFixed(1)) })}><Minus size={16} /></button>
               <span className="flex-1 text-center text-xl font-semibold tabular-nums text-white">{p.temp.toFixed(1)} °C</span>
               <button type="button" className="btn btn-secondary h-10 w-10 justify-center px-0" aria-label="Subir temperatura"
-                onClick={() => apply({ ...p, temp: Math.min(28, +(p.temp + 0.5).toFixed(1)) })}><Plus size={16} /></button>
+                onClick={() => adjust({ temp: Math.min(28, +(p.temp + 0.5).toFixed(1)) })}><Plus size={16} /></button>
             </div>
           </div>
 
           <div className="flex items-center justify-between">
             <span className="text-sm text-slate-300">Fuga de CO</span>
-            <button type="button" role="switch" aria-checked={p.co} aria-label="Fuga de CO" onClick={() => apply({ ...p, co: !p.co })}
+            <button type="button" role="switch" aria-checked={p.co} aria-label="Fuga de CO" onClick={() => adjust({ co: !p.co })}
               className={`relative h-[22px] w-10 rounded-full transition-colors ${p.co ? 'bg-red-500' : 'bg-slate-700'}`}>
               <span className={`absolute top-[3px] h-4 w-4 rounded-full bg-white transition-all ${p.co ? 'left-[21px]' : 'left-[3px]'}`} />
             </button>

@@ -71,6 +71,7 @@ export interface NodeState {
   co2_proxy?: number
   umbral_ocupacion?: number   // MQ-135 ADC from which the node counts the room as occupied (set from the dashboard)
   ocupado?: boolean           // occupancy as the node decided it (newer firmware, with hysteresis)
+  fallo_dht?: boolean         // the DHT missed 3 reads in a row: safe state
 }
 
 // Flat reading document as returned by GET /sensors/.
