@@ -365,13 +365,15 @@ async def room_history(
     room_id: str,
     day: Optional[str] = Query(None, alias="date", pattern=r"^\d{4}-\d{2}-\d{2}$"),
     format: str = Query("json", pattern="^(json|csv)$"),
+    whole: bool = Query(False, alias="all"),
     db: AsyncIOMotorDatabase = Depends(get_db),
     db_sql: Session = Depends(get_db_sql),
     current_user: User = Depends(get_current_user),
 ):
     """What the room's node measured and did on one local day (latest day with data if
     `date` is missing): 5-min series, classes, summary, events and state changes.
-    `format=csv` downloads every reading of that day."""
+    `format=csv` downloads every reading of that day; with `all=true`, every reading
+    the room has (from its first to its last local day)."""
     from datetime import date as date_cls
     from fastapi.responses import Response
     from app.services.room_history import FMT, OFFSET, PROJECTION, day_bounds, equipment_for, summarize_day, ina_energy_series
@@ -388,6 +390,10 @@ async def room_history(
         data_end = datetime.fromisoformat(last[0]["timestamp"][:19])
         anchor = date_cls.fromisoformat(day) if day else (data_end + OFFSET).date()
         start, end = day_bounds(anchor)
+        whole = whole and format == "csv"
+        if whole:
+            data_start = datetime.fromisoformat(first[0]["timestamp"][:19])
+            start, end = day_bounds((data_start + OFFSET).date())[0], day_bounds((data_end + OFFSET).date())[1]
         match = {**base, "timestamp": {"$gte": start.strftime(FMT), "$lt": end.strftime(FMT)}}
         docs = await db["sensor_readings"].find(match, PROJECTION).sort("timestamp", 1).to_list(length=None)
         meta = await db["strategy_simulation_meta"].find_one({"_id": room_id})
@@ -398,9 +404,20 @@ async def room_history(
     from app.services.strategy_series import class_intervals, room_timetable
     timetable = class_intervals(*(await run_in_threadpool(room_timetable, db_sql, room_id)), start, end)
     in_class = lambda iso: any(s_ <= datetime.fromisoformat(iso[:19]) < e_ for s_, e_, _ in timetable)  # noqa: E731
+    if whole:
+        # Readings and classes are both sorted: walk them together instead of scanning
+        # every class for every reading of the whole history.
+        cursor = {"k": 0}
+
+        def in_class(iso: str) -> bool:  # noqa: F811
+            t = datetime.fromisoformat(iso[:19])
+            while cursor["k"] < len(timetable) and timetable[cursor["k"]][1] <= t:
+                cursor["k"] += 1
+            return cursor["k"] < len(timetable) and timetable[cursor["k"]][0] <= t
     ina_wh = ina_energy_series(docs)
 
     if format == "csv":
+        label = f"{(start + OFFSET).date().isoformat()}_{(end + OFFSET - timedelta(days=1)).date().isoformat()}" if whole else anchor.isoformat()
         lines = ["timestamp_utc,temperature,humidity,co2_ppm,co_ppm,accion,ventilador_pct,calefactor,ocupada,alarma_co,manual,motivo,ina_voltage_v,ina_current_ma,ina_power_mw,ina_energy_wh_accumulated,sensor_id"]
         for d, accumulated_wh in zip(docs, ina_wh):
             ns = d.get("node_state") or {}
@@ -417,7 +434,7 @@ async def room_history(
                 d.get("sensor_id", ""),
             ]))
         return Response("\n".join(lines) + "\n", media_type="text/csv",
-                        headers={"Content-Disposition": f'attachment; filename="historial_{room_id}_{anchor.isoformat()}.csv"'})
+                        headers={"Content-Disposition": f'attachment; filename="historial_{room_id}_{label}.csv"'})
 
     equipment = equipment_for(meta, start, end)
     if not (meta and meta.get("start") and meta["start"] < end and meta["end"] >= start):

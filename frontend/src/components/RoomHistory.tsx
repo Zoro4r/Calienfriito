@@ -79,7 +79,8 @@ export default function RoomHistory({ roomId }: { roomId: string }) {
   const [day, setDay] = useState<string | null>(null)
   const [data, setData] = useState<History | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [downloading, setDownloading] = useState(false)
+  const [downloading, setDownloading] = useState<'day' | 'all' | null>(null)
+  const [csvError, setCsvError] = useState<string | null>(null)
   const [hover, setHover] = useState<number | null>(null)   // index under the synced cursor
 
   useEffect(() => {
@@ -93,18 +94,24 @@ export default function RoomHistory({ roomId }: { roomId: string }) {
     return () => { cancelled = true; clearInterval(t) }
   }, [roomId, day])
 
-  async function downloadCsv() {
+  // 'day' = the day on screen; 'all' = every reading the room has, first to last day.
+  async function downloadCsv(scope: 'day' | 'all') {
     if (!data?.date) return
-    setDownloading(true)
+    setDownloading(scope)
+    setCsvError(null)
     try {
-      const { data: blob } = await api.get(`/sensors/rooms/${encodeURIComponent(roomId)}/history?date=${data.date}&format=csv`, { responseType: 'blob' })
-      const url = URL.createObjectURL(blob as Blob)
+      const q = scope === 'all' ? 'all=true' : `date=${data.date}`
+      const res = await api.get(`/sensors/rooms/${encodeURIComponent(roomId)}/history?${q}&format=csv`, { responseType: 'blob' })
+      const named = /filename="([^"]+)"/.exec(String(res.headers['content-disposition'] ?? ''))?.[1]
+      const url = URL.createObjectURL(res.data as Blob)
       const a = document.createElement('a')
       a.href = url
-      a.download = `historial_${roomId}_${data.date}.csv`
+      a.download = named ?? `historial_${roomId}_${scope === 'all' ? 'completo' : data.date}.csv`
       a.click()
       URL.revokeObjectURL(url)
-    } finally { setDownloading(false) }
+    } catch {
+      setCsvError('No se pudo descargar el CSV.')
+    } finally { setDownloading(null) }
   }
 
   if (error) return <p className="text-sm text-red-300">{error}</p>
@@ -141,9 +148,17 @@ export default function RoomHistory({ roomId }: { roomId: string }) {
       <div className="flex shrink-0 flex-wrap items-center justify-between gap-3">
         <DayNav date={data.date} start={data.start} end={data.end} dataStart={data.data_start} dataEnd={data.data_end} onChange={setDay} />
         <span className="hidden flex-1 text-xs text-slate-500 md:block">Pasa el cursor: todos los gráficos marcan la misma hora.</span>
-        <button className="btn btn-secondary text-xs" onClick={downloadCsv} disabled={downloading || !s?.readings}>
-          {downloading ? <RefreshCw size={13} className="animate-spin" /> : <Download size={13} />} CSV del día · incluye INA219
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          {csvError && <span className="flex items-center gap-1.5 text-xs text-slate-400"><span className="h-1.5 w-1.5 rounded-full bg-red-400" />{csvError}</span>}
+          <button className="btn btn-secondary text-xs" onClick={() => downloadCsv('day')} disabled={downloading != null || !s?.readings}
+            title="Todas las lecturas del día mostrado, con INA219">
+            {downloading === 'day' ? <RefreshCw size={13} className="animate-spin" /> : <Download size={13} />} CSV del día
+          </button>
+          <button className="btn btn-secondary text-xs" onClick={() => downloadCsv('all')} disabled={downloading != null}
+            title={`Todas las lecturas del aula ${roomId}, desde el primer día con datos hasta hoy`}>
+            {downloading === 'all' ? <RefreshCw size={13} className="animate-spin" /> : <Download size={13} />} CSV de todo el historial
+          </button>
+        </div>
       </div>
 
       {/* The day in two numbers */}
