@@ -8,10 +8,10 @@ import { locationLabel, shortName, type Room } from '../utils/rooms'
 
 // One room's week, the whole 24 h (scrolls, opens at 07:00): weekly classes and that week's
 // reservations, Monday to Saturday, with week navigation. Used by Horarios (with its room list) and by Aulas → Horarios.
-// Data: GET /admin/occupancy/week. Admins add weekly classes (day, hours, expected people)
-// by dragging over a day (a dialog then asks for the expected people) and edit or remove one
-// by clicking it: POST / PUT / DELETE /admin/rooms/{id}/schedules,
-// and /admin/reservations for one-day classes.
+// Data: GET /admin/occupancy/week. Admins and collaborators drag over a day to add a block
+// (a dialog then asks for the expected people) and click one to edit or remove it.
+// Weekly classes (POST / PUT / DELETE /admin/rooms/{id}/schedules) are admin only;
+// one-day reservations (/admin/reservations) are open to admins and collaborators.
 
 interface Block { id?: number | null; room_id: string; day: number; start: string; end: string; kind: 'class' | 'reservation'; people: number; by: string | null }
 interface Week { week_start: string; blocks: Block[] }
@@ -44,6 +44,9 @@ export default function RoomWeek({ room }: { room: Room | undefined }) {
   useEffect(() => { if (scrollRef.current) scrollRef.current.scrollTop = SCROLL_TO_H * HOUR_PX - 8 }, [room?.id])
   const { user } = useAuth()
   const isAdmin = user?.role === 'admin'
+  // Collaborators book one-day reservations; only admins touch the weekly classes.
+  const canReserve = isAdmin || user?.role === 'collaborator'
+  const canEdit = (b: Shown) => b.id != null && (isAdmin || (canReserve && !b.isClass))
   const [version, setVersion] = useState(0)                 // bump to reload the week
   const cap = room?.max_capacity ?? 0
   // repeat: 'weekly' → a weekly class (schedule); 'once' → only that date (a reservation).
@@ -71,7 +74,7 @@ export default function RoomWeek({ room }: { room: Room | undefined }) {
     b = Math.min(b, H1 * 60 - 1)                            // 24:00 is written 23:59
     a = Math.min(a, b - 15)
     setDrag(null); setFormError(null)
-    setForm({ day: drag.day, start: hm(a), end: hm(b), people: 1, repeat: 'weekly' })
+    setForm({ day: drag.day, start: hm(a), end: hm(b), people: 1, repeat: isAdmin ? 'weekly' : 'once' })
   }
 
   // "lunes 16 de noviembre" for a column of the week on screen.
@@ -175,15 +178,18 @@ export default function RoomWeek({ room }: { room: Room | undefined }) {
           <button className="btn btn-secondary" onClick={() => setAnchor(mondayOf(localDay(Date.now())))}>Esta semana</button>
         </div>
       </header>
-      {isAdmin && room && <p className="shrink-0 border-b border-slate-800 px-4 py-2 text-xs text-slate-400">Arrastra sobre un día para agregar una clase. Haz clic en una clase para editarla o eliminarla.</p>}
+      {canReserve && room && <p className="shrink-0 border-b border-slate-800 px-4 py-2 text-xs text-slate-400">{isAdmin
+        ? 'Arrastra sobre un día para agregar una clase o reserva. Haz clic en una para editarla o eliminarla.'
+        : 'Arrastra sobre un día para reservar el aula. Haz clic en una reserva para editarla o eliminarla; las clases semanales solo las cambia un administrador.'}</p>}
       {form && (
-        <Dialog size="sm" title="Nueva clase" onClose={() => { setForm(null); setFormError(null) }}
+        <Dialog size="sm" title={form.repeat === 'once' ? 'Nueva reserva' : 'Nueva clase'} onClose={() => { setForm(null); setFormError(null) }}
           footer={<div className="grid w-full grid-cols-2 gap-3">
             <button className="btn btn-secondary justify-center py-1.5 text-xs" disabled={busy} onClick={() => { setForm(null); setFormError(null) }}>Cancelar</button>
-            <button className="btn btn-primary justify-center py-1.5 text-xs" disabled={busy || !form.start || !form.end || form.people < 1} onClick={addClass}>Guardar clase</button>
+            <button className="btn btn-primary justify-center py-1.5 text-xs" disabled={busy || !form.start || !form.end || form.people < 1} onClick={addClass}>{form.repeat === 'once' ? 'Guardar reserva' : 'Guardar clase'}</button>
           </div>}>
           <div className="flex flex-col gap-4">
-            <div>
+            {!isAdmin && <p className="text-sm text-slate-300">Solo el {dayLabel(form.day)}</p>}
+            {isAdmin && <div>
               <span className="field-label">Frecuencia</span>
               <div className="segmented grid w-full grid-cols-2 p-0.5" role="radiogroup" aria-label="Frecuencia">
                 {([['weekly', `Todos los ${DAYS_LONG[form.day]}`], ['once', `Solo el ${dayNum(shiftDayBy(anchor, form.day))} de ${monthName(shiftDayBy(anchor, form.day))}`]] as const).map(([v, label]) => (
@@ -191,7 +197,7 @@ export default function RoomWeek({ room }: { room: Room | undefined }) {
                     className={`segmented-item justify-center px-2 py-1.5 text-xs ${form.repeat === v ? 'segmented-item-active' : ''}`}>{label}</button>
                 ))}
               </div>
-            </div>
+            </div>}
             <div className="grid grid-cols-2 gap-3">
               <label><span className="field-label">Inicio</span>
                 <input type="time" className="field" value={form.start} step={900} onChange={e => setForm({ ...form, start: e.target.value })} />
@@ -210,7 +216,7 @@ export default function RoomWeek({ room }: { room: Room | undefined }) {
         </Dialog>
       )}
       {selected && edit && (
-        <Dialog size="sm" title="Editar clase" onClose={closeSelected}
+        <Dialog size="sm" title={selected.isClass ? 'Editar clase' : 'Editar reserva'} onClose={closeSelected}
           footer={<div className="flex w-full items-center gap-2">
             <button className="btn btn-danger py-1.5 text-xs" disabled={busy} onClick={() => confirmDelete ? removeClass() : setConfirmDelete(true)}>
               <Trash2 size={13} /> {confirmDelete ? 'Confirmar' : 'Eliminar'}
@@ -257,8 +263,8 @@ export default function RoomWeek({ room }: { room: Room | undefined }) {
               ))}
             </div>
             {columns.map((col, i) => (
-              <div key={days[i]} className={`relative touch-none select-none border-l border-slate-800 ${isAdmin && room ? 'cursor-crosshair' : ''}`}
-                onPointerDown={isAdmin && room ? e => { e.currentTarget.setPointerCapture(e.pointerId); const m = minuteAt(e); setDrag({ day: days[i], from: m, to: m }) } : undefined}
+              <div key={days[i]} className={`relative touch-none select-none border-l border-slate-800 ${canReserve && room ? 'cursor-crosshair' : ''}`}
+                onPointerDown={canReserve && room ? e => { e.currentTarget.setPointerCapture(e.pointerId); const m = minuteAt(e); setDrag({ day: days[i], from: m, to: m }) } : undefined}
                 onPointerMove={drag && drag.day === days[i] ? e => setDrag({ ...drag, to: minuteAt(e) }) : undefined}
                 onPointerUp={drag && drag.day === days[i] ? endDrag : undefined}>
                 {drag && drag.day === days[i] && (
@@ -272,10 +278,10 @@ export default function RoomWeek({ room }: { room: Room | undefined }) {
                 ))}
                 {col.map(b => (
                   <div key={b.key} title={b.tip}
-                    role={isAdmin && b.id != null ? 'button' : undefined} tabIndex={isAdmin && b.id != null ? 0 : undefined}
+                    role={canEdit(b) ? 'button' : undefined} tabIndex={canEdit(b) ? 0 : undefined}
                     onPointerDown={e => e.stopPropagation()}
-                    onClick={isAdmin && b.id != null ? () => { setForm(null); setFormError(null); setConfirmDelete(false); setSelected({ ...b, day: days[i] }); setEdit({ start: hm(b.a), end: hm(Math.min(b.b, 24 * 60 - 1)), people: b.people }) } : undefined}
-                    className={`absolute inset-x-1 flex overflow-hidden rounded-md border bg-slate-800 px-2 ${isAdmin && b.id != null ? 'cursor-pointer hover:border-slate-500 ' : ''}${selected?.key === b.key ? 'ring-1 ring-blue-500 ' : ''}${b.b - b.a <= 60 ? 'items-center' : 'flex-col gap-0.5 py-1'} ${b.dashed ? 'border-dashed border-slate-500' : 'border-slate-700'}`}
+                    onClick={canEdit(b) ? () => { setForm(null); setFormError(null); setConfirmDelete(false); setSelected({ ...b, day: days[i] }); setEdit({ start: hm(b.a), end: hm(Math.min(b.b, 24 * 60 - 1)), people: b.people }) } : undefined}
+                    className={`absolute inset-x-1 flex overflow-hidden rounded-md border bg-slate-800 px-2 ${canEdit(b) ? 'cursor-pointer hover:border-slate-500 ' : ''}${selected?.key === b.key ? 'ring-1 ring-blue-500 ' : ''}${b.b - b.a <= 60 ? 'items-center' : 'flex-col gap-0.5 py-1'} ${b.dashed ? 'border-dashed border-slate-500' : 'border-slate-700'}`}
                     style={{ top: `calc(${top(b.a)} + 2px)`, height: `calc(${height(b.a, b.b)} - 4px)` }}>
                     {b.b - b.a <= 60
                       ? <span className="truncate text-xs text-slate-300"><span className="font-medium text-slate-100">{b.line.split(' · ')[0]}</span> · {b.line.split(' · ').slice(1).join(' · ')}</span>
