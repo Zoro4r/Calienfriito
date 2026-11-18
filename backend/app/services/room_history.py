@@ -32,27 +32,64 @@ PROJECTION = {
 }
 
 
-def ina_energy_series(docs: list[dict]) -> list[float | None]:
-    """Cumulative measured Wh for sorted readings; never fill missing or >60 s gaps."""
-    energy_wh = 0.0
-    previous: dict[str, tuple[datetime, float]] = {}
-    values: list[float | None] = []
-    for doc in docs:
+class InaEnergy:
+    """Cumulative measured Wh, one sorted reading at a time; never fills missing or >60 s gaps."""
+
+    def __init__(self) -> None:
+        self.wh = 0.0
+        self.previous: dict[str, tuple[datetime, float]] = {}
+
+    def add(self, doc: dict) -> float | None:
         power_mw = doc.get("ina_power_mw")
         sensor_id = doc.get("sensor_id", "")
         if power_mw is None:
-            previous.pop(sensor_id, None)
-            values.append(None)
-            continue
+            self.previous.pop(sensor_id, None)
+            return None
         ts = datetime.fromisoformat(doc["timestamp"])
-        prior = previous.get(sensor_id)
+        prior = self.previous.get(sensor_id)
         if prior:
             gap_s = (ts - prior[0]).total_seconds()
             if 0 < gap_s <= MAX_GAP_S:
-                energy_wh += (prior[1] + power_mw) * gap_s / 7_200_000
-        previous[sensor_id] = (ts, power_mw)
-        values.append(round(energy_wh, 6))
-    return values
+                self.wh += (prior[1] + power_mw) * gap_s / 7_200_000
+        self.previous[sensor_id] = (ts, power_mw)
+        return round(self.wh, 6)
+
+
+def ina_energy_series(docs: list[dict]) -> list[float | None]:
+    """Cumulative measured Wh for sorted readings; never fill missing or >60 s gaps."""
+    acc = InaEnergy()
+    return [acc.add(d) for d in docs]
+
+
+class ClassWalker:
+    """Whether sorted timestamps fall in a class, walking the sorted timetable once."""
+
+    def __init__(self, timetable: list[tuple[datetime, datetime, int]]) -> None:
+        self.timetable, self.k = timetable, 0
+
+    def at(self, iso: str) -> bool:
+        t = datetime.fromisoformat(iso[:19])
+        while self.k < len(self.timetable) and self.timetable[self.k][1] <= t:
+            self.k += 1
+        return self.k < len(self.timetable) and self.timetable[self.k][0] <= t
+
+
+CSV_HEADER = ("timestamp_utc,temperature,humidity,co2_ppm,co_ppm,accion,ventilador_pct,calefactor,ocupada,alarma_co,"
+              "manual,motivo,ina_voltage_v,ina_current_ma,ina_power_mw,ina_energy_wh_accumulated,sensor_id")
+
+
+def csv_line(d: dict, accumulated_wh: float | None, occupied: bool) -> str:
+    """One reading as a row of the history CSV (CSV_HEADER)."""
+    ns = d.get("node_state") or {}
+    motivo = (ns.get("motivo") or "").replace('"', "'")
+    blank = lambda v: "" if v is None else v  # noqa: E731
+    return ",".join(str(v) for v in [
+        d["timestamp"][:19], blank(d.get("temperature")), blank(d.get("humidity")), d.get("co2_ppm") or "", d.get("co_ppm") or "",
+        ns.get("accion", ""), round((ns.get("ventilador_pwm") or 0) * 100 / 255), int(bool(ns.get("calefactor"))),
+        int(occupied), int(bool(ns.get("alarma_co"))), int(bool(ns.get("manual"))), f'"{motivo}"',
+        blank(d.get("ina_voltage_v")), blank(d.get("ina_current_ma")), blank(d.get("ina_power_mw")),
+        blank(accumulated_wh), d.get("sensor_id", ""),
+    ])
 
 
 def day_bounds(day: date) -> tuple[datetime, datetime]:

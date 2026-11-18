@@ -399,8 +399,10 @@ async def room_history(
     `format=csv` downloads every reading of that day; with `all=true`, every reading
     the room has (from its first to its last local day)."""
     from datetime import date as date_cls
-    from fastapi.responses import Response
-    from app.services.room_history import FMT, OFFSET, PROJECTION, day_bounds, equipment_for, ina_energy_series
+    from fastapi.responses import StreamingResponse
+    from app.services.room_history import (
+        CSV_HEADER, FMT, OFFSET, PROJECTION, ClassWalker, InaEnergy, csv_line, day_bounds, equipment_for,
+    )
 
     sensors = await run_in_threadpool(
         lambda: [d.id for d in db_sql.query(SensorDevice).filter(SensorDevice.room_id == room_id).all()]
@@ -420,47 +422,34 @@ async def room_history(
             start, end = day_bounds((data_start + OFFSET).date())[0], day_bounds((data_end + OFFSET).date())[1]
         match = {**base, "timestamp": {"$gte": start.strftime(FMT), "$lt": end.strftime(FMT)}}
         meta = await db["strategy_simulation_meta"].find_one({"_id": room_id})
-        docs: list[dict] = []
-        if format == "csv":
-            docs = await db["sensor_readings"].find(match, PROJECTION).sort("timestamp", 1).to_list(length=None)
     except PyMongoError as exc:
         logger.error("MongoDB unavailable: %s", exc)
         raise HTTPException(status_code=503, detail="Database unavailable") from exc
 
     from app.services.strategy_series import class_intervals, room_timetable
     timetable = class_intervals(*(await run_in_threadpool(room_timetable, db_sql, room_id)), start, end)
-    in_class = lambda iso: any(s_ <= datetime.fromisoformat(iso[:19]) < e_ for s_, e_, _ in timetable)  # noqa: E731
-    if whole:
-        # Readings and classes are both sorted: walk them together instead of scanning
-        # every class for every reading of the whole history.
-        cursor = {"k": 0}
-
-        def in_class(iso: str) -> bool:  # noqa: F811
-            t = datetime.fromisoformat(iso[:19])
-            while cursor["k"] < len(timetable) and timetable[cursor["k"]][1] <= t:
-                cursor["k"] += 1
-            return cursor["k"] < len(timetable) and timetable[cursor["k"]][0] <= t
-    ina_wh = ina_energy_series(docs)
 
     if format == "csv":
         label = f"{(start + OFFSET).date().isoformat()}_{(end + OFFSET - timedelta(days=1)).date().isoformat()}" if whole else anchor.isoformat()
-        lines = ["timestamp_utc,temperature,humidity,co2_ppm,co_ppm,accion,ventilador_pct,calefactor,ocupada,alarma_co,manual,motivo,ina_voltage_v,ina_current_ma,ina_power_mw,ina_energy_wh_accumulated,sensor_id"]
-        for d, accumulated_wh in zip(docs, ina_wh):
-            ns = d.get("node_state") or {}
-            motivo = (ns.get("motivo") or "").replace('"', "'")
-            power_mw = d.get("ina_power_mw")
-            lines.append(",".join(str(v) for v in [
-                d["timestamp"][:19], "" if d.get("temperature") is None else d["temperature"], "" if d.get("humidity") is None else d["humidity"], d.get("co2_ppm") or "", d.get("co_ppm") or "",
-                ns.get("accion", ""), round((ns.get("ventilador_pwm") or 0) * 100 / 255), int(bool(ns.get("calefactor"))),
-                int(in_class(d["timestamp"])), int(bool(ns.get("alarma_co"))), int(bool(ns.get("manual"))), f'"{motivo}"',
-                "" if d.get("ina_voltage_v") is None else d["ina_voltage_v"],
-                "" if d.get("ina_current_ma") is None else d["ina_current_ma"],
-                "" if power_mw is None else power_mw,
-                "" if accumulated_wh is None else accumulated_wh,
-                d.get("sensor_id", ""),
-            ]))
-        return Response("\n".join(lines) + "\n", media_type="text/csv",
-                        headers={"Content-Disposition": f'attachment; filename="historial_{room_id}_{label}.csv"'})
+
+        async def rows():
+            # Streamed in batches straight from the cursor: the download starts at once and
+            # months of 1 Hz readings never sit in memory together.
+            yield CSV_HEADER + "\n"
+            energy, classes, batch = InaEnergy(), ClassWalker(timetable), []
+            try:
+                async for d in db["sensor_readings"].find(match, PROJECTION).sort("timestamp", 1).batch_size(5000):
+                    batch.append(csv_line(d, energy.add(d), classes.at(d["timestamp"])))
+                    if len(batch) >= 5000:
+                        yield "\n".join(batch) + "\n"
+                        batch = []
+            except PyMongoError as exc:
+                logger.error("History CSV of %s interrupted: %s", room_id, exc)
+            if batch:
+                yield "\n".join(batch) + "\n"
+
+        return StreamingResponse(rows(), media_type="text/csv",
+                                 headers={"Content-Disposition": f'attachment; filename="historial_{room_id}_{label}.csv"'})
 
     equipment = equipment_for(meta, start, end)
     if not (meta and meta.get("start") and meta["start"] < end and meta["end"] >= start):
