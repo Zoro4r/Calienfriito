@@ -33,6 +33,12 @@
  *      calefactor o ambos apagados durante ese tiempo;
  *      {"modo":"auto"} vuelve a la heuristica.
  *      La alarma de CO siempre tiene prioridad sobre el control manual.
+ *      Campos opcionales (el backend los envia; ordenes sin ellos siguen valiendo):
+ *        "id":"a1b2c3"          se devuelve en la telemetria como comando_id
+ *        "autoridad":"predictivo" orden del control predictivo: respeta el intervalo
+ *                               minimo y se cancela al perder la conexion MQTT
+ *        "expira_utc":1763400000 vencimiento absoluto (s UTC): una orden retenida
+ *                               que llega vencida tras un reinicio se rechaza
  *
  *  Formato del log serie:
  *     [  tiempo s] ETIQ  mensaje
@@ -135,6 +141,8 @@ const unsigned long MIN_ON_MS         = 60000UL; // intervalo minimo on/off
 const float HR_ALTA_PCT               = 60.0;    // HR >= 60 %  -> HUMEDO
 const float HR_BAJA_PCT               = 40.0;    // HR <= 40 %  -> SECO
 const int CO_ALARM_PPM                = 50;      // umbral de alarma de CO
+const int CO_ALARM_OFF_PPM            = 40;      // se apaga solo bajo este valor (sin rebote en 50)
+const int DHT_FALLOS_SEGURO           = 3;       // lecturas invalidas seguidas antes del estado seguro
 const int OCCUPANCY_ADC_THRESHOLD     = 260;     // AJUSTA: con el MQ-135 del protoboard: ~230 vacio y ~280 soplando (mira el CICLO)
 // Conversion SIMULADA del MQ-135 a ppm de CO2 (lineal, 0-4095 -> 400-2000 ppm) para
 // el backend, que estima la ocupacion como (CO2 - 420) / 25 personas. En hardware
@@ -272,6 +280,11 @@ bool manualActivo = false;
 Accion accionManual = ACCION_STANDBY;
 unsigned long manualHastaMs = 0;
 const unsigned long MANUAL_MAX_S = 4UL * 3600UL;   // tope de seguridad: 4 h
+bool ordenPredictiva = false;      // la orden activa viene del control predictivo, no de una persona
+char comandoId[16] = "";           // id de la ultima orden recibida (eco en la telemetria)
+const char* comandoEstado = "";    // aplicado | rechazado | vencido
+int fallosDHT = 0;                 // lecturas invalidas seguidas del DHT
+bool ocupadoActual = false;        // lectura propia del MQ-135, independiente de la accion
 
 // ------------------------------- Log -----------------------------------------
 // Toda linea termina en "\r\n" (como Serial.println). Con "\n" solo, la Wokwi
@@ -537,7 +550,8 @@ String valorJson(const String& json, const char* clave) {
 }
 
 // Comando del dashboard (RF-26). Llega retenido: tras un reinicio el nodo recupera
-// el ultimo comando (RF-12) y vuelve a aplicar su duracion completa.
+// el ultimo comando (RF-12). Si trae expira_utc y el reloj NTP es valido, solo aplica
+// el tiempo que le queda; si ya vencio, lo rechaza (no revive una orden antigua).
 void onMqttMessage(char* topic, byte* payload, unsigned int length) {
   String msg;
   for (unsigned int i = 0; i < length; i++) msg += (char)payload[i];
@@ -547,24 +561,48 @@ void onMqttMessage(char* topic, byte* payload, unsigned int length) {
   if (modo == "auto" || msg.length() == 0) {
     if (manualActivo) LOG("EVT", "Control manual desactivado: vuelve la heuristica");
     manualActivo = false;
+    ordenPredictiva = false;
     return;
   }
+  String id = valorJson(msg, "id");
+  id.toCharArray(comandoId, sizeof(comandoId));
   if (modo != "manual") {
     LOG("RED", "Comando ignorado: modo desconocido");
+    comandoEstado = "rechazado";
     return;
   }
   String accion = valorJson(msg, "accion");
   unsigned long duracion = (unsigned long)valorJson(msg, "duracion_s").toInt();
   if (duracion == 0 || duracion > MANUAL_MAX_S) duracion = min(duracion == 0 ? 900UL : duracion, MANUAL_MAX_S);
-  if (accion == "COOLING") accionManual = ACCION_COOLING;
-  else if (accion == "HEATING") accionManual = ACCION_HEATING;
-  else if (accion == "STANDBY") accionManual = ACCION_STANDBY;
-  else { LOG("RED", "Comando ignorado: accion manual no soportada"); return; }
+  long expira = valorJson(msg, "expira_utc").toInt();
+  time_t ahoraUtc = time(nullptr);
+  if (expira > 0 && ahoraUtc > 1700000000L) {          // reloj NTP valido (despues de 2023)
+    if ((long)ahoraUtc >= expira) {
+      LOG("RED", "Comando rechazado: vencio hace %ld s", (long)ahoraUtc - expira);
+      comandoEstado = "vencido";
+      return;
+    }
+    duracion = min(duracion, (unsigned long)(expira - (long)ahoraUtc));
+  }
+  Accion pedida;
+  if (accion == "COOLING") pedida = ACCION_COOLING;
+  else if (accion == "HEATING") pedida = ACCION_HEATING;
+  else if (accion == "STANDBY") pedida = ACCION_STANDBY;
+  else { LOG("RED", "Comando ignorado: accion manual no soportada"); comandoEstado = "rechazado"; return; }
+  bool predictiva = valorJson(msg, "autoridad") == "predictivo";
+  if (predictiva && pedida == ACCION_HEATING) {
+    LOG("RED", "Comando rechazado: el control predictivo no puede encender el calefactor");
+    comandoEstado = "rechazado";
+    return;
+  }
+  accionManual = pedida;
+  ordenPredictiva = predictiva;
   int nivel = valorJson(msg, "nivel").toInt();
   nivelManual = (nivel >= 20 && nivel <= 100) ? nivel : 100;
   manualActivo = true;
   manualHastaMs = millis() + duracion * 1000UL;
-  LOG("EVT", "Control manual: %s durante %lu s", nombreAccion(accionManual), duracion);
+  comandoEstado = "aplicado";
+  LOG("EVT", "Control %s: %s durante %lu s", predictiva ? "predictivo" : "manual", nombreAccion(accionManual), duracion);
 }
 
 void intentarWiFi() {
@@ -681,18 +719,21 @@ void publicarTelemetria(bool dhtOk, float tempC, float humedad, int mq135, int m
     inaDisponible = false;
   }
 #endif
-  char buf[850]; // cabe en el buffer MQTT fijado con setBufferSize en setup()
+  char buf[1000]; // cabe en el buffer MQTT fijado con setBufferSize en setup() (1024)
   const int n = snprintf(buf, sizeof(buf),
     "{\"ciclo\":%lu,\"uptime_s\":%.1f,\"temp_c\":%s,\"humedad\":%s,\"co2_proxy\":%d,\"co2_ppm\":%.0f,"
     "\"co_ppm\":%d,\"accion\":\"%s\",\"alarma_co\":%s,\"ventilador_pwm\":%d,\"ventilador_rpm\":%d,"
     "\"calefactor\":%s,\"buzzer\":%s,\"led\":\"%s\",\"motivo\":\"%s\","
-    "\"bloqueo_s\":%lu,\"pendiente\":\"%s\",\"manual\":%s,\"manual_restante_s\":%lu,\"is_simulated\":%s%s}",
+    "\"bloqueo_s\":%lu,\"pendiente\":\"%s\",\"manual\":%s,\"manual_restante_s\":%lu,\"is_simulated\":%s%s,"
+    "\"ocupado\":%s,\"autoridad\":\"%s\",\"comando_id\":\"%s\",\"comando_estado\":\"%s\",\"fallo_dht\":%s}",
     numeroCiclo, millis() / 1000.0, temp, hum, mq135, co2ppm, mq7ppm, nombreAccion(accionActual),
     alarmaCO ? "true" : "false", dutyVentilador, rpmVentilador,
     calefactorEncendido ? "true" : "false", buzzerEncendido ? "true" : "false",
     colorLed, motivo, bloqueoSegundos, bloqueoSegundos ? nombreAccion(accionPendiente) : "",
     manualActivo ? "true" : "false", manualActivo ? (manualHastaMs - millis() + 999) / 1000 : 0UL,
-    TELEMETRIA_SIMULADA ? "true" : "false", inaJson);
+    TELEMETRIA_SIMULADA ? "true" : "false", inaJson,
+    ocupadoActual ? "true" : "false", manualActivo ? (ordenPredictiva ? "predictivo" : "manual") : "local",
+    comandoId, comandoEstado, fallosDHT >= DHT_FALLOS_SEGURO ? "true" : "false");
   if (n < 0 || n >= (int)sizeof(buf)) {
     LOG("RED", "Telemetria demasiado larga; no se publica truncada");
     return;
@@ -856,12 +897,16 @@ void loop() {
                                                // en hardware real usar la curva
                                                // de calibracion del MQ-7
   bool ocupado = mq135 >= OCCUPANCY_ADC_THRESHOLD;
+  ocupadoActual = ocupado;
   float tempC   = dht.readTemperature();
   float humedad = dht.readHumidity();
   bool dhtOk = !isnan(tempC) && !isnan(humedad);
+  fallosDHT = dhtOk ? 0 : min(fallosDHT + 1, 1000);
 
   // --- 2. Seguridad: alarma de CO, evaluada antes que el control de clima ---
-  alarmaCO = (mq7ppm >= CO_ALARM_PPM);
+  // Se enciende en CO_ALARM_PPM y se apaga bajo CO_ALARM_OFF_PPM: el ruido del ADC
+  // alrededor de 50 ppm no hace sonar el buzzer a intervalos.
+  alarmaCO = alarmaCO ? (mq7ppm >= CO_ALARM_OFF_PPM) : (mq7ppm >= CO_ALARM_PPM);
   if (alarmaCO && !alarmaCOPrevia) {
     LOG("EVT", "ALARMA DE CO ACTIVADA: %d ppm >= %d ppm. Ventilador forzado al 100%%, calefactor OFF y buzzer ON",
         mq7ppm, CO_ALARM_PPM);
@@ -876,7 +921,18 @@ void loop() {
   bloqueoSegundos = 0;
   if (manualActivo && (long)(millis() - manualHastaMs) >= 0) {
     manualActivo = false;
+    comandoEstado = "vencido";
     LOG("EVT", "Control manual vencido: vuelve la heuristica");
+  }
+  // Una orden predictiva solo vale mientras el servidor que la dio sigue presente.
+  if (manualActivo && ordenPredictiva && !mqtt.connected()) {
+    manualActivo = false;
+    LOG("EVT", "Sin conexion MQTT: se cancela la orden predictiva y vuelve la heuristica");
+  }
+  // Sin temperatura no hay realimentacion: una orden de calefactor no sigue a ciegas.
+  if (manualActivo && accionManual == ACCION_HEATING && fallosDHT >= DHT_FALLOS_SEGURO) {
+    manualActivo = false;
+    LOG("EVT", "Sin lectura del DHT11: se cancela la orden de calefactor");
   }
   if (alarmaCO) {
     snprintf(motivoDecision, sizeof(motivoDecision),
@@ -889,16 +945,39 @@ void loop() {
              accionManual == ACCION_COOLING ? (nivelManual < 100 ? "ventilador ON (potencia reducida)" : "ventilador ON")
              : accionManual == ACCION_HEATING ? "calefactor ON" : "ventilador y calefactor OFF",
              restante);
-    if (accionManual != accionActual) {
-      LOG("EVT", "Transicion de estado (manual): %s -> %s",
+    bool cambiaActuador =
+        ventiladorEncendido(accionManual) != ventiladorEncendido(accionActual) ||
+        calefactorActivo(accionManual) != calefactorActivo(accionActual);
+    unsigned long transcurrido = millis() - ultimoCambioMs;
+    if (accionManual != accionActual && ordenPredictiva && cambiaActuador &&
+        huboCambioActuador && transcurrido < MIN_ON_MS) {
+      // La orden predictiva respeta el intervalo minimo, como las reglas;
+      // la de una persona es explicita y se aplica al instante.
+      bloqueoSegundos = (MIN_ON_MS - transcurrido + 999) / 1000;
+      accionPendiente = accionManual;
+      snprintf(motivoDecision, sizeof(motivoDecision),
+               "Orden predictiva: sigue en %s, pasa a %s en %lu s (minimo %lu s)",
+               nombreAccion(accionActual), nombreAccion(accionManual), bloqueoSegundos, MIN_ON_MS / 1000);
+    } else if (accionManual != accionActual) {
+      LOG("EVT", "Transicion de estado (%s): %s -> %s", ordenPredictiva ? "predictivo" : "manual",
           nombreAccion(accionActual), nombreAccion(accionManual));
       accionActual = accionManual;
       ultimoCambioMs = millis();
       huboCambioActuador = true;
     }
+  } else if (!dhtOk && fallosDHT >= DHT_FALLOS_SEGURO) {
+    // Estado seguro: sin temperatura no se calienta ni se enfria a ciegas.
+    snprintf(motivoDecision, sizeof(motivoDecision),
+             "Fallo del DHT11 (%d lecturas): control termico detenido", fallosDHT);
+    if (accionActual == ACCION_HEATING || accionActual == ACCION_COOLING || accionActual == ACCION_PRE_COOLING) {
+      LOG("EVT", "Fallo del DHT11: %s -> STANDBY (estado seguro)", nombreAccion(accionActual));
+      accionActual = ACCION_STANDBY;
+      ultimoCambioMs = millis();
+      huboCambioActuador = true;
+    }
   } else if (!dhtOk) {
     snprintf(motivoDecision, sizeof(motivoDecision),
-             "Sin lectura del DHT11: se mantiene el ultimo estado");
+             "Sin lectura del DHT11: se mantiene el ultimo estado (%d de %d)", fallosDHT, DHT_FALLOS_SEGURO);
   } else {
     float co2ppm = CO2_PPM_MIN + mq135 * (CO2_PPM_MAX - CO2_PPM_MIN) / 4095.0;
     actualizarNivelReglas(tempC, co2ppm);

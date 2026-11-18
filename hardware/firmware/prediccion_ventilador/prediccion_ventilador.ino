@@ -95,6 +95,9 @@ struct RemoteOrder {
   uint32_t expiresAt = 0;
 };
 
+char commandId[16] = "";          // id de la ultima orden (eco en la telemetria como comando_id)
+const char* commandState = "";    // aplicado | rechazado
+
 DHT dht(DHT_PIN, DHT_TYPE);
 Preferences preferences;
 WiFiClient networkClient;
@@ -279,8 +282,12 @@ void onMessage(char*, byte* payload, unsigned int length) {
     Serial.println("Orden remota cancelada; control local activo.");
     return;
   }
-  const bool predictive = mode == "predictivo";
-  const bool manual = mode == "manual";
+  // El backend envia las ordenes predictivas como modo "manual" + autoridad "predictivo"
+  // (compatible con nodo.ino.tmpl): se tratan igual que modo "predictivo".
+  const bool predictive = mode == "predictivo" || (mode == "manual" && jsonValue(message, "autoridad") == "predictivo");
+  const bool manual = mode == "manual" && !predictive;
+  jsonValue(message, "id").toCharArray(commandId, sizeof(commandId));
+  commandState = "rechazado";
   if (!predictive && !manual) { Serial.println("Orden rechazada: modo desconocido."); return; }
   Action requested;
   if (!parseAction(jsonValue(message, "accion"), requested)) { Serial.println("Orden rechazada: accion invalida."); return; }
@@ -292,7 +299,8 @@ void onMessage(char*, byte* payload, unsigned int length) {
   if ((requested == Action::Cooling || requested == Action::PreCooling) && (level < 20 || level > 100)) level = predictive ? 55 : 100;
   remoteOrder = {true, predictive ? Authority::Predictive : Authority::Manual,
                  requested, static_cast<uint8_t>(max(0, level)), millis() + duration * 1000UL};
-  Serial.printf("Orden %s aceptada: %s por %lu s.\n", mode.c_str(), actionName(requested), static_cast<unsigned long>(duration));
+  commandState = "aplicado";
+  Serial.printf("Orden %s aceptada: %s por %lu s.\n", predictive ? "predictiva" : "manual", actionName(requested), static_cast<unsigned long>(duration));
 }
 
 void connectWifi() {
@@ -338,11 +346,12 @@ void publishTelemetry(float temperature, float humidity, bool dhtOk, int mq135Ra
   snprintf(payload, sizeof(payload),
            "{\"ciclo\":%lu,\"temp_c\":%s,\"humedad\":%s,\"co2_proxy\":%d,\"co2_ppm\":%s,"
            "\"mq7_raw\":%d,\"co_ppm\":%s,\"ocupado\":%s,\"accion\":\"%s\",\"autoridad\":\"%s\","
-           "\"orden_restante_s\":%lu,\"alarma_co\":%s,\"ventilador_pct\":%u,\"calibracion_valida\":%s,\"is_simulated\":false}",
+           "\"orden_restante_s\":%lu,\"alarma_co\":%s,\"ventilador_pct\":%u,\"calibracion_valida\":%s,\"is_simulated\":false,"
+           "\"comando_id\":\"%s\",\"comando_estado\":\"%s\"}",
            static_cast<unsigned long>(cycleNumber), temperatureJson, humidityJson, mq135Raw, co2Json,
            mq7Raw, coJson, occupied ? "true" : "false", actionName(currentAction), authorityName(authority),
            static_cast<unsigned long>(remaining), coAlarm ? "true" : "false", fanPercent,
-           calibrationValid ? "true" : "false");
+           calibrationValid ? "true" : "false", commandId, commandState);
   mqtt.publish(topicTelemetry.c_str(), payload);
 }
 
