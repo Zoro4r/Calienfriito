@@ -5,7 +5,7 @@ import api, { getApiErrorDetail } from '../api/client'
 import { fmt, parseUtc, LEVEL_TONE, type Tone } from './ui'
 import { AXIS, tempBand, humBand, coBand, type Band } from './NodeLive'
 import { levelCO2, getStatusLabel } from '../utils/sensorColors'
-import DayNav from './DayNav'
+import DayNav, { localDay } from './DayNav'
 
 // "Historial" tab: what the room's node measured and did on one local day
 // (GET /sensors/rooms/{id}/history). Temperature, humidity, CO₂ and CO are stacked on the
@@ -83,16 +83,27 @@ export default function RoomHistory({ roomId }: { roomId: string }) {
   const [csvError, setCsvError] = useState<string | null>(null)
   const [hover, setHover] = useState<number | null>(null)   // index under the synced cursor
 
+  // Only the latest day with data can still change: past days are loaded once, not polled.
+  // DayNav always sets a date, so going back to the latest day counts as latest too.
+  // The latest day is the date the server answers with no date asked (the view's first load);
+  // the local day of data_end is the fallback.
+  const [latestDate, setLatestDate] = useState<string | null>(null)
+  const latestDay = latestDate ?? (data?.data_end ? localDay(parseUtc(data.data_end).getTime()) : null)
+  const polling = day === null || day === latestDay
   useEffect(() => {
     let cancelled = false
     const q = day ? `?date=${day}` : ''
     const load = () => api.get<History>(`/sensors/rooms/${encodeURIComponent(roomId)}/history${q}`)
-      .then(r => { if (!cancelled) { setData(r.data); setError(null) } })
+      .then(r => {
+        if (cancelled) return
+        setData(r.data); setError(null)
+        if (!day && r.data.date) setLatestDate(r.data.date)
+      })
       .catch(err => { if (!cancelled) setError(getApiErrorDetail(err) ?? 'No se pudo cargar el historial.') })
     load()
-    const t = setInterval(load, POLL_MS)
+    const t = polling ? setInterval(load, POLL_MS) : undefined
     return () => { cancelled = true; clearInterval(t) }
-  }, [roomId, day])
+  }, [roomId, day, polling])
 
   // 'day' = the day on screen; 'all' = every reading the room has, first to last day.
   async function downloadCsv(scope: 'day' | 'all') {
