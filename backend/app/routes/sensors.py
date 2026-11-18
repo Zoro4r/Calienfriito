@@ -31,6 +31,8 @@ router = APIRouter()
 SIM_TOOL_READINGS = {"is_simulated": True, "node_state": None}
 SIM_PURGE_EVERY_S = 30
 _last_sim_purge = 0.0
+EVENTS_TTL_S = 30
+_events_cache: dict = {}
 
 
 # ============================================================================
@@ -322,6 +324,11 @@ async def recent_events(
     newest first, derived from the last `hours` of readings in one query."""
     from app.services.room_events import detect_events
 
+    # The scan reads every raw reading of the window (~260k for 24 h and three nodes), so the
+    # result is shared for EVENTS_TTL_S: every open Resumen asks for the same thing.
+    cached = _events_cache.get((hours, limit))
+    if cached and time.monotonic() - cached[0] < EVENTS_TTL_S:
+        return cached[1]
     devices = await run_in_threadpool(lambda: db_sql.query(SensorDevice.id, SensorDevice.room_id).all())
     room_of = {sid: rid for sid, rid in devices if rid}
     if not room_of:
@@ -342,6 +349,7 @@ async def recent_events(
         by_sensor.setdefault(d["sensor_id"], []).append(d)
     events = [e for sid, rows in by_sensor.items() for e in detect_events(room_of[sid], rows, now)]
     events.sort(key=lambda e: e["timestamp"], reverse=True)
+    _events_cache[(hours, limit)] = (time.monotonic(), events[:limit])
     return events[:limit]
 
 
