@@ -131,6 +131,7 @@ async def list_readings(
     since: Optional[str] = Query(None, description="Only readings newer than this stored timestamp (incremental polling)"),
     db: AsyncIOMotorDatabase = Depends(get_db),
     db_sql: Session = Depends(get_db_sql),
+    current_user: User = Depends(get_current_user),
 ):
     mongo_filter: dict = {}
 

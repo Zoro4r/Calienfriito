@@ -48,6 +48,7 @@ def test_health_is_public_and_reports_engine():
     "/api/v1/admin/reservations",
     "/api/v1/reports/roi",
     "/api/v1/sensors/emergencies",
+    "/api/v1/sensors/?room_id=A101",
 ])
 def test_protected_routes_reject_missing_token(path):
     assert client.get(path).status_code == 401
