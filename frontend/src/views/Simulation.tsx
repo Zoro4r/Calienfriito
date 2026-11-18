@@ -24,7 +24,7 @@ interface Params { people: number; temp: number; co: boolean; mode: Mode }
 const HOLD_S = FW.minOnS
 const HOLD_FROM_C = 25.2   // "Calor con gente": the state the node keeps during the hold
 
-// The six scenarios of the lab presentation, in its order.
+// The six scenarios of the lab presentation, in its order, plus high CO2.
 const PRESETS: { label: string; p: Params }[] = [
   { label: 'Aula vacía', p: { people: 0, temp: 24.0, co: false, mode: 'auto' } },
   { label: 'Calor con gente', p: { people: 30, temp: HOLD_FROM_C, co: false, mode: 'auto' } },
@@ -32,6 +32,8 @@ const PRESETS: { label: string; p: Params }[] = [
   { label: 'Orden manual', p: { people: 30, temp: 24.0, co: false, mode: 'manual' } },
   { label: 'Monóxido', p: { people: 30, temp: 24.2, co: true, mode: 'auto' } },
   { label: 'Sensor caído', p: { people: 30, temp: 24.0, co: false, mode: 'dht' } },
+  // Not in the slides: 40 people (1650 ppm) while cooling at 50 % pushes the fan to 100 %.
+  { label: 'CO₂ alto', p: { people: 40, temp: 24.6, co: false, mode: 'auto' } },
 ]
 const PEOPLE = [0, 15, 30, 40]
 const LED: Record<string, string> = { AZUL: '#3b82f6', VERDE: '#22c55e', ROJO: '#ef4444', AMBAR: '#f59e0b', APAGADO: '#334155' }
