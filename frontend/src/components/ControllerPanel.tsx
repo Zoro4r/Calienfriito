@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { ChevronRight, RefreshCw } from 'lucide-react'
 import api, { getApiErrorDetail } from '../api/client'
 import { useAuth } from '../context/AuthContext'
-import { parseUtc } from './ui'
+import { clockTime, parseUtc } from './ui'
 import { FW } from './NodeLive'
 
 // "Quién controla el aula": pick the node's rules or the learning controller, as two options
@@ -13,8 +13,17 @@ import { FW } from './NodeLive'
 const ORDER_FRESH_MIN = 10
 
 type Mode = 'rules' | 'learning'
-interface LastOrder { mode: 'fan' | 'heater' | 'off'; level: number | null; started_at: string }
-interface Controller { mode: Mode; by: string | null; at: string | null; last_order: LastOrder | null }
+type Ack = 'applied' | 'rejected' | 'expired' | 'pending' | null
+interface LastOrder { mode: 'fan' | 'heater' | 'off' | 'auto'; level: number | null; started_at: string; ack?: Ack }
+interface Controller {
+  mode: Mode; by: string | null; at: string | null; last_order: LastOrder | null
+  // Learning may only drive once its forecast beats persistence and the node has control enabled.
+  authorized?: boolean; authorization_reason?: string; fallback?: string | null
+}
+
+const ACK_TEXT: Record<Exclude<Ack, null>, string> = {
+  applied: 'aplicada por el nodo', rejected: 'rechazada por el nodo', expired: 'vencida', pending: 'sin confirmación del nodo',
+}
 
 const num = (n: number, dec = 1) => n.toLocaleString('es', { minimumFractionDigits: dec, maximumFractionDigits: dec })
 
@@ -76,8 +85,14 @@ export default function ControllerPanel({ roomId }: { roomId: string }) {
 
   const mode: Mode = ctl?.mode ?? 'rules'
   const order = ctl?.last_order
-  const orderFresh = !!order && now - parseUtc(order.started_at).getTime() < ORDER_FRESH_MIN * 60_000
+  const orderFresh = !!order && order.mode !== 'auto' && now - parseUtc(order.started_at).getTime() < ORDER_FRESH_MIN * 60_000
   const locked = !isAdmin || !ctl || saving
+  const authorized = ctl?.authorized ?? false
+  const fallback = mode === 'learning' ? ctl?.fallback : null
+  const learningStatus = mode === 'learning'
+    ? (fallback ? 'Respaldo: reglas' : orderFresh ? 'Controlando' : 'Sin órdenes recientes')
+    : authorized ? 'En sombra' : 'En sombra · no validado'
+  const learningDot = mode === 'learning' ? (fallback || !orderFresh ? 'bg-amber-400' : 'bg-emerald-400') : 'bg-slate-500'
 
   return (
     <section className="surface flex flex-col">
@@ -94,13 +109,21 @@ export default function ControllerPanel({ roomId }: { roomId: string }) {
           onSelect={() => { setConfirming(false); choose('rules') }}
         />
         <Option
-          title="Control predictivo" desc="Pronostica la temperatura a 30 min (Chronos) y enciende el ventilador antes de que suba."
-          selected={mode === 'learning' || confirming} disabled={locked}
-          status={mode === 'learning' ? (orderFresh ? 'Controlando' : 'Sin órdenes recientes') : 'En sombra'}
-          statusDot={mode === 'learning' ? (orderFresh ? 'bg-emerald-400' : 'bg-amber-400') : 'bg-slate-500'}
+          title="Control predictivo supervisado"
+          desc={mode !== 'learning' && !authorized && ctl?.authorization_reason
+            ? `Pronostica la temperatura a 30 min y enciende el ventilador antes de que suba. Aún no se puede activar: ${ctl.authorization_reason}`
+            : 'Pronostica la temperatura a 30 min y enciende el ventilador antes de que suba.'}
+          selected={mode === 'learning' || confirming} disabled={locked || (mode !== 'learning' && !authorized)}
+          status={learningStatus} statusDot={learningDot}
           onSelect={() => { if (mode !== 'learning') setConfirming(true) }}
         />
       </div>
+      {fallback && <p className="border-t border-slate-800 px-5 py-3 text-sm text-slate-300">Las reglas del nodo actúan como respaldo: {fallback}</p>}
+      {mode === 'learning' && order && order.mode !== 'auto' && order.ack && (
+        <p className="border-t border-slate-800 px-5 py-3 text-xs text-slate-400">
+          Última orden del modelo ({order.mode === 'fan' ? `ventilador al ${order.level ?? 100} %` : order.mode}, {clockTime(parseUtc(order.started_at))}): {ACK_TEXT[order.ack]}
+        </p>
+      )}
       {confirming && (
         <div className="flex flex-wrap items-center gap-3 border-t border-slate-800 px-5 py-3">
           <p className="flex-1 text-sm text-slate-300">¿Pasar el control al aprendizaje? Si el nodo pierde la conexión, vuelve solo a sus reglas.</p>
