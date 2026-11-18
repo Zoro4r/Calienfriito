@@ -12,6 +12,7 @@ import { FW } from '../components/NodeLive'
 // "Volver a la normalidad" (or leaving the page) removes them.
 
 const SEND_EVERY_MS = 5_000
+const SEND_EVERY_PHYSICAL_MS = 2_000   // a connected node answers with its telemetry: refresh faster
 const co2Of = (people: number) => 450 + people * 30            // ppm the class breathes out
 const humidityOf = (people: number) => Math.round(50 + people * 0.3)
 
@@ -34,13 +35,15 @@ const PRESETS: { label: string; p: Params }[] = [
 ]
 const PEOPLE = [0, 15, 30, 40]
 const LED: Record<string, string> = { AZUL: '#3b82f6', VERDE: '#22c55e', ROJO: '#ef4444', AMBAR: '#f59e0b', APAGADO: '#334155' }
+// The physical node reports e.g. "AZUL (enfriando)" or "sin color (aula vacia)".
+const ledKey = (led?: string) => { const k = (led ?? '').split(' ')[0].toUpperCase(); return k in LED ? k : 'APAGADO' }
 
 // The node's answer in plain words.
 function explain(n: NodeState, p: Params, holdLeft: number): { state: string; why: string } {
   if (n.alarma_co) return { state: 'Alarma de CO', why: 'hay CO en el aire' }
   if (n.fallo_dht) return { state: 'En espera', why: 'el DHT no responde: el nodo pasa a estado seguro' }
   if (n.manual) return { state: 'Orden manual', why: 'llegó una orden desde el dashboard' }
-  if (n.bloqueo_s) return { state: 'Mantiene el estado', why: `el cambio llegó antes de ${HOLD_S} s: cambia en ${holdLeft} s` }
+  if (n.bloqueo_s) return { state: 'Mantiene el estado', why: `el cambio llegó antes de ${HOLD_S} s: cambia en ${holdLeft || n.bloqueo_s} s` }
   if (n.accion === 'DISABLED') return { state: 'Aula vacía', why: 'casi no hay CO₂: no hay clase' }
   if (n.accion === 'HEATING') return { state: 'Calentando', why: `hace frío (bajo ${FW.heatOn} °C)` }
   if (n.accion === 'COOLING') {
@@ -60,7 +63,8 @@ function Classroom({ p, node }: { p: Params; node: NodeState | null }) {
   const fanPct = node ? Math.round(((node.ventilador_pwm ?? 0) / 255) * 100) : 0
   const heat = !!node?.calefactor
   const buzz = !!node?.buzzer
-  const led = LED[node?.led ?? 'APAGADO'] ?? LED.APAGADO
+  const ledOn = !!node && ledKey(node.led) !== 'APAGADO'
+  const led = LED[ledKey(node?.led)]
   const co2 = co2Of(p.people)
   const dots = Math.max(0, Math.round((co2 - 450) / 70))
   const shown = Math.min(24, Math.round(p.people / 2))
@@ -75,8 +79,8 @@ function Classroom({ p, node }: { p: Params; node: NodeState | null }) {
       <div className="absolute left-[70px] top-[62px] flex items-center gap-2.5">
         <div className="relative flex h-10 w-16 items-center justify-center rounded-md border border-slate-600 bg-slate-950 text-[11px] text-slate-400">
           ESP32
-          <span className={`absolute -right-1.5 -top-1.5 h-2.5 w-2.5 rounded-full ${node && node.led !== 'APAGADO' ? 'demo-glow' : ''}`}
-            style={{ background: led, boxShadow: node && node.led !== 'APAGADO' ? `0 0 10px ${led}` : 'none' }} />
+          <span className={`absolute -right-1.5 -top-1.5 h-2.5 w-2.5 rounded-full ${ledOn ? 'demo-glow' : ''}`}
+            style={{ background: led, boxShadow: ledOn ? `0 0 10px ${led}` : 'none' }} />
         </div>
         {buzz && (
           <svg width="40" height="40" viewBox="0 0 40 40" className="overflow-visible" aria-label="Buzzer sonando" role="img">
@@ -168,6 +172,7 @@ export default function Simulation() {
   const [active, setActive] = useState(false)
   const [node, setNode] = useState<NodeState | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [physical, setPhysical] = useState(false)   // the room's real node is answering
   const sent = useRef(false)
 
   useEffect(() => {
@@ -182,11 +187,11 @@ export default function Simulation() {
     if (!room) return
     const dht = params.mode !== 'dht'
     const holdS = params.mode === 'hold' ? Math.max(0, Math.ceil((holdUntil.current - Date.now()) / 1000)) : 0
-    api.post<{ node_state: NodeState }>('/sensors/demo', {
+    api.post<{ node_state: NodeState | null; physical?: boolean }>('/sensors/demo', {
       room_id: room, temperature: dht ? params.temp : null, humidity: dht ? humidityOf(params.people) : null,
       co2_ppm: co2Of(params.people), co_ppm: params.co ? 80 : 1, manual: params.mode === 'manual',
       hold_s: holdS, hold_temperature: holdS ? HOLD_FROM_C : null,
-    }).then(r => { setNode(r.data.node_state); setError(null); sent.current = true })
+    }).then(r => { setNode(r.data.node_state); setPhysical(!!r.data.physical); setError(null); sent.current = true })
       .catch(err => { setError(getApiErrorDetail(err) ?? 'No se pudo enviar la lectura.'); setActive(false) })
   }, [])
 
@@ -194,13 +199,13 @@ export default function Simulation() {
   useEffect(() => {
     if (!active) return
     send(p, roomId)
-    const t = setInterval(() => send(p, roomId), SEND_EVERY_MS)
+    const t = setInterval(() => send(p, roomId), physical ? SEND_EVERY_PHYSICAL_MS : SEND_EVERY_MS)
     // During a hold: a countdown, and the change sent right when it ends.
     const left = p.mode === 'hold' ? holdUntil.current - Date.now() : 0
     const tick = left > 0 ? setInterval(() => setNow(Date.now()), 1000) : undefined
     const end = left > 0 ? setTimeout(() => send(p, roomId), left + 200) : undefined
     return () => { clearInterval(t); clearInterval(tick); clearTimeout(end) }
-  }, [active, p, roomId, send])
+  }, [active, p, roomId, send, physical])
 
   // Leaving the page puts the rooms back to normal.
   useEffect(() => () => { if (sent.current) api.delete('/sensors/demo').catch(() => {}) }, [])
@@ -212,7 +217,7 @@ export default function Simulation() {
   // Adjusting a value by hand leaves the special scenarios.
   const adjust = (change: Partial<Params>) => apply({ ...p, ...change, mode: 'auto' })
   const reset = () => {
-    setActive(false); setNode(null)
+    setActive(false); setNode(null); setPhysical(false)
     api.delete('/sensors/demo').then(() => { sent.current = false }).catch(() => {})
   }
   const changeRoom = (id: string) => {
@@ -221,9 +226,10 @@ export default function Simulation() {
   }
 
   const preset = PRESETS.find(x => x.p.people === p.people && x.p.temp === p.temp && x.p.co === p.co && x.p.mode === p.mode)
-  const holdLeft = Math.max(0, Math.ceil((holdUntil.current - now) / 1000))
+  // The physical node runs its own hysteresis: its countdown is the one it reports.
+  const holdLeft = physical ? node?.bloqueo_s ?? 0 : Math.max(0, Math.ceil((holdUntil.current - now) / 1000))
   const info = node ? explain(node, p, holdLeft) : null
-  const led = LED[node?.led ?? 'APAGADO'] ?? LED.APAGADO
+  const led = LED[ledKey(node?.led)]
 
   return (
     <div className="flex flex-col gap-4 lg:h-full lg:min-h-0">
@@ -292,7 +298,9 @@ export default function Simulation() {
               <span className="flex items-center gap-2"><span className="h-2.5 w-2.5 rounded-full" style={{ background: led }} /><span className="text-lg font-semibold text-white">{info.state}</span></span>
               <span className="text-sm text-slate-400">Porque {info.why}</span>
               <span className="text-xs text-slate-500">
-                Se envía a {roomId} cada {SEND_EVERY_MS / 1000} s: se ve en <Link to={`/aulas?aula=${roomId}`} className="text-slate-300 hover:underline">Aulas</Link>,{' '}
+                {physical
+                  ? <>El nodo de {roomId} usa estas lecturas en lugar de sus sensores y sus actuadores responden. Se ve en</>
+                  : <>Se envía a {roomId} cada {SEND_EVERY_MS / 1000} s: se ve en</>} <Link to={`/aulas?aula=${roomId}`} className="text-slate-300 hover:underline">Aulas</Link>,{' '}
                 <Link to={`/aulas/${encodeURIComponent(roomId)}`} className="text-slate-300 hover:underline">En vivo</Link> y <Link to="/" className="text-slate-300 hover:underline">Resumen</Link>.
               </span>
             </> : <span className="text-sm text-slate-500">Sin enviar. Elige un escenario o ajusta un valor.</span>}
