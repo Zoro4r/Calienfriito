@@ -400,8 +400,7 @@ async def room_history(
     the room has (from its first to its last local day)."""
     from datetime import date as date_cls
     from fastapi.responses import Response
-    from app.services.room_history import FMT, OFFSET, PROJECTION, day_bounds, equipment_for, summarize_day, ina_energy_series
-    from app.services.reading_rollups import load_minutes, summarize_minutes
+    from app.services.room_history import FMT, OFFSET, PROJECTION, day_bounds, equipment_for, ina_energy_series
 
     sensors = await run_in_threadpool(
         lambda: [d.id for d in db_sql.query(SensorDevice).filter(SensorDevice.room_id == room_id).all()]
@@ -421,12 +420,8 @@ async def room_history(
             start, end = day_bounds((data_start + OFFSET).date())[0], day_bounds((data_end + OFFSET).date())[1]
         match = {**base, "timestamp": {"$gte": start.strftime(FMT), "$lt": end.strftime(FMT)}}
         meta = await db["strategy_simulation_meta"].find_one({"_id": room_id})
-        # The day view reads per-minute rollups (~1 440 small documents), not ~86 400 readings.
-        by_sensor = {} if format == "csv" else await load_minutes(db, sensors, start, end, verify=True)
         docs: list[dict] = []
-        if format == "csv" or len(by_sensor) > 1:
-            # CSV lists every reading; several nodes in one room interleave their readings,
-            # which per-sensor rollups cannot replay, so they keep the raw path.
+        if format == "csv":
             docs = await db["sensor_readings"].find(match, PROJECTION).sort("timestamp", 1).to_list(length=None)
     except PyMongoError as exc:
         logger.error("MongoDB unavailable: %s", exc)
@@ -472,22 +467,13 @@ async def room_history(
         configured_room = await run_in_threadpool(lambda: db_sql.query(Room).filter(Room.id == room_id).first())
         if configured_room:
             equipment["fan_max_w"] = configured_room.fan_power_w
-    if docs:
-        result = summarize_day(docs, equipment["fan_max_w"], equipment["heater_w"], timetable)
-        result["summary"]["ina_energy_wh"] = next((value for value in reversed(ina_wh) if value is not None), None)
-    else:
-        minutes = next(iter(by_sensor.values()), [])
-        result, energy = await run_in_threadpool(summarize_minutes, minutes, equipment["fan_max_w"], equipment["heater_w"], timetable)
-        result["summary"]["ina_energy_wh"] = energy
-    if meta and meta.get("start") and meta["start"] < end and meta["end"] >= start:
-        # Simulated days know how many people came: same class intervals as "Aprendizaje".
-        from app.services.strategy_series import _intervals
-        minutes = await db["strategy_simulation"].aggregate([
-            {"$match": {"room_id": room_id, "strategy": "rules", "ts": {"$gte": start, "$lt": end}}},
-            {"$group": {"_id": {"$dateTrunc": {"date": "$ts", "unit": "minute"}},
-                        "occ": {"$max": "$occupied"}, "people": {"$max": "$people"}}},
-        ]).to_list(length=None)
-        result["classes"] = _intervals(minutes)
+    simulated = bool(meta and meta.get("start") and meta["start"] < end and meta["end"] >= start)
+    try:
+        result = await _history_day(db, room_id, sensors, anchor, start, end, closed=anchor < (data_end + OFFSET).date(),
+                                    equipment=equipment, timetable=timetable, simulated=simulated)
+    except PyMongoError as exc:
+        logger.error("MongoDB unavailable: %s", exc)
+        raise HTTPException(status_code=503, detail="Database unavailable") from exc
     return {
         "room_id": room_id,
         "date": anchor.isoformat(),
@@ -498,6 +484,52 @@ async def room_history(
         "equipment": equipment,
         **result,
     }
+
+
+async def _history_day(db, room_id: str, sensors: list[str], anchor, start: datetime, end: datetime, *,
+                       closed: bool, equipment: dict, timetable: list, simulated: bool) -> dict:
+    """Series, periods and summary of one local day. Finished days are served from
+    `room_history_days` while their inputs and raw reading count stay the same."""
+    from app.services import history_cache
+    from app.services.reading_rollups import load_minutes, summarize_minutes
+    from app.services.room_history import FMT, PROJECTION, summarize_day, ina_energy_series
+
+    key = raw_n = None
+    if closed:
+        key = history_cache.inputs_key(sensors, equipment, timetable, simulated)
+        raw_n = await db["sensor_readings"].count_documents(
+            {"sensor_id": {"$in": sensors}, "timestamp": {"$gte": start.strftime(FMT), "$lt": end.strftime(FMT)}})
+        cached = await history_cache.get(db, room_id, anchor, key, raw_n)
+        if cached is not None:
+            return cached
+
+    # Per-minute rollups (~1 440 small documents a day) instead of ~86 400 readings.
+    by_sensor = await load_minutes(db, sensors, start, end, verify=True)
+    if len(by_sensor) > 1:
+        # Several nodes in one room interleave their readings, which per-sensor rollups
+        # cannot replay: keep the raw path.
+        docs = await db["sensor_readings"].find(
+            {"sensor_id": {"$in": sensors}, "node_state.accion": {"$exists": True},
+             "timestamp": {"$gte": start.strftime(FMT), "$lt": end.strftime(FMT)}}, PROJECTION,
+        ).sort("timestamp", 1).to_list(length=None)
+        result = summarize_day(docs, equipment["fan_max_w"], equipment["heater_w"], timetable)
+        result["summary"]["ina_energy_wh"] = next((v for v in reversed(ina_energy_series(docs)) if v is not None), None)
+    else:
+        minutes = next(iter(by_sensor.values()), [])
+        result, energy = await run_in_threadpool(summarize_minutes, minutes, equipment["fan_max_w"], equipment["heater_w"], timetable)
+        result["summary"]["ina_energy_wh"] = energy
+    if simulated:
+        # Simulated days know how many people came: same class intervals as "Aprendizaje".
+        from app.services.strategy_series import _intervals
+        sim = await db["strategy_simulation"].aggregate([
+            {"$match": {"room_id": room_id, "strategy": "rules", "ts": {"$gte": start, "$lt": end}}},
+            {"$group": {"_id": {"$dateTrunc": {"date": "$ts", "unit": "minute"}},
+                        "occ": {"$max": "$occupied"}, "people": {"$max": "$people"}}},
+        ]).to_list(length=None)
+        result["classes"] = _intervals(sim)
+    if closed:
+        await history_cache.put(db, room_id, anchor, key, raw_n, result)
+    return result
 
 
 @router.get("/rooms/{room_id}/strategies")
