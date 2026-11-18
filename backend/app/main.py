@@ -66,6 +66,8 @@ async def startup_learning_loop():
     warm_up()
     from app.services.strategy_series import start_warm_loop
     start_warm_loop()
+    from app.services.reading_rollups import start_rollup_loop
+    start_rollup_loop()
 
 
 @app.on_event("shutdown")
