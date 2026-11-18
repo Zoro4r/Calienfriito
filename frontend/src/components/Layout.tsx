@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, Suspense } from 'react'
 import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom'
 import {
   LayoutDashboard, FlaskConical, DoorOpen,
@@ -8,6 +8,7 @@ import {
 import { useAuth } from '../context/AuthContext'
 import { useEmergency } from '../context/EmergencyContext'
 import Logo from './Logo'
+import ContentLoading from './ContentLoading'
 
 interface NavItem {
   to: string
@@ -357,7 +358,10 @@ export default function Layout() {
 
       {/* ── Main content — offset by the sidebar width ── */}
       <main className={`h-dvh overflow-y-auto p-4 pt-16 transition-[margin] duration-200 sm:p-6 sm:pt-16 lg:pt-6 ${folded ? 'lg:ml-[4.5rem]' : 'lg:ml-56'}`}>
-        <Outlet />
+        {/* Only the content area suspends; sidebar, modals and alerts stay mounted. */}
+        <Suspense fallback={<ContentLoading />}>
+          <Outlet />
+        </Suspense>
       </main>
 
       {/* ── Persistent emergency button (bottom-right) ── */}

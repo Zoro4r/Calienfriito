@@ -1,4 +1,4 @@
-import { lazy, Suspense, type ReactNode } from 'react'
+import { lazy, type ReactNode } from 'react'
 import { BrowserRouter, Routes, Route, Navigate, useLocation, useParams } from 'react-router-dom'
 import { useAuth } from './context/AuthContext'
 import { EmergencyProvider } from './context/EmergencyContext'
@@ -10,17 +10,11 @@ import UserManagement from './views/UserManagement'
 import Register from './views/Register'
 
 // Chart-heavy views load on demand — keeps Recharts out of the initial bundle.
+// Their Suspense boundary lives in Layout, around <Outlet />, so the sidebar
+// stays mounted while a view loads.
 const RoomDetail = lazy(() => import('./views/RoomDetail'))
 const ROIReport  = lazy(() => import('./views/ROIReport'))
 const Simulation = lazy(() => import('./views/Simulation'))
-
-function RouteFallback() {
-  return (
-    <div className="flex items-center justify-center h-64 text-slate-500 text-sm">
-      Cargando…
-    </div>
-  )
-}
 
 /** Redirects unauthenticated users to /login. When session expires, renders
  *  children so Layout's session-expired modal can display instead of hard redirect. */
@@ -51,7 +45,6 @@ export default function App() {
   return (
     <BrowserRouter>
       <EmergencyProvider>
-      <Suspense fallback={<RouteFallback />}>
       <Routes>
         {/* Public */}
         <Route path="/login"    element={<Login />} />
@@ -103,7 +96,6 @@ export default function App() {
 
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
-      </Suspense>
       </EmergencyProvider>
     </BrowserRouter>
   )
