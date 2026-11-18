@@ -153,6 +153,15 @@ async def publish_command(room_id: str, payload: dict) -> None:
         await client.publish(f"ccs/{room_id}/command", json.dumps(payload), qos=1, retain=True)
 
 
+async def publish_sim(room_id: str, payload: dict) -> None:
+    """Simulated sensor values for the room's node (ccs/<room>/sim, not retained): while they
+    keep arriving, the node uses them instead of its sensors and its actuators answer to them."""
+    import aiomqtt
+
+    async with aiomqtt.Client(MQTT_HOST, MQTT_PORT, identifier=f"ccs-sim-{uuid.uuid4().hex[:8]}") as client:
+        await client.publish(f"ccs/{room_id}/sim", json.dumps(payload), qos=0, retain=False)
+
+
 async def publish_settings(room_id: str, payload: dict) -> None:
     """Publish the node's retained settings to ccs/<room>/settings (e.g. its occupancy threshold).
 

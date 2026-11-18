@@ -660,6 +660,9 @@ class DemoReadingIn(BaseModel):
 
 # Demo readings carry the emulated node decision, tagged so they can be told apart and removed.
 DEMO_READINGS = {"is_simulated": True, "node_state.demo": True}
+# Rooms whose physical node is being driven from the Simulación page, and whether it got a manual order.
+_demo_physical: dict[str, bool] = {}
+DEMO_MANUAL_MIN = 10
 
 
 @router.post("/demo", responses={403: {"model": ErrorDetail}, 404: {"model": ErrorDetail}})
@@ -685,6 +688,33 @@ async def send_demo_reading(
     )
     if device is None:
         raise HTTPException(status_code=404, detail=f"El aula {body.room_id} no tiene nodo registrado.")
+
+    # A connected node gets the values instead of its sensors and decides with its own rules
+    # (hysteresis, CO alarm, DHT failure): its telemetry is the answer, nothing is emulated.
+    from app.services.mqtt_ingest import NODE_STATUS, publish_sim, publish_command
+    if (NODE_STATUS.get(body.room_id) or {}).get("online"):
+        from app.services.node_emulator import co2_to_adc
+        try:
+            await publish_sim(body.room_id, {
+                "t": body.temperature, "h": body.humidity, "mq135": co2_to_adc(body.co2_ppm),
+                "co": round(body.co_ppm), "dht": body.temperature is not None,
+            })
+            if body.manual != _demo_physical.get(body.room_id, False):
+                await publish_command(body.room_id, override_command("fan" if body.manual else "auto",
+                                                                     DEMO_MANUAL_MIN, current_user.username))
+            _demo_physical[body.room_id] = body.manual
+        except Exception as exc:
+            logger.error("Could not publish simulation to %s: %s", body.room_id, exc)
+            raise HTTPException(status_code=503, detail="No se pudo enviar la simulación al nodo.") from exc
+        try:
+            last = await db["sensor_readings"].find_one(
+                {"sensor_id": device.id, "node_state.accion": {"$exists": True}},
+                {"_id": 0, "node_state": 1, "timestamp": 1}, sort=[("timestamp", -1)])
+        except PyMongoError as exc:
+            raise HTTPException(status_code=503, detail="Database unavailable") from exc
+        return {"room_id": body.room_id, "sensor_id": device.id, "physical": True,
+                "node_state": (last or {}).get("node_state")}
+
     node_state = emulate(body.temperature, body.co2_ppm, body.co_ppm, manual=body.manual,
                          hold_s=body.hold_s, hold_temperature=body.hold_temperature)
     reading = SensorReading(
@@ -704,9 +734,19 @@ async def clear_demo_readings(
     db: AsyncIOMotorDatabase = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Remove every demo reading: the rooms go back to their own data."""
+    """Remove every demo reading: the rooms go back to their own data, and nodes driven
+    from the page go back to their own sensors (and drop the page's manual order)."""
     if current_user.role != "admin":
         raise HTTPException(status_code=403, detail="Admin role required.")
+    from app.services.mqtt_ingest import publish_sim, publish_command
+    for room_id, manual in list(_demo_physical.items()):
+        try:
+            await publish_sim(room_id, {"fin": True})
+            if manual:
+                await publish_command(room_id, override_command("auto", 0, current_user.username))
+        except Exception as exc:
+            logger.error("Could not end simulation on %s: %s", room_id, exc)
+        _demo_physical.pop(room_id, None)
     try:
         result = await db["sensor_readings"].delete_many(DEMO_READINGS)
     except PyMongoError as exc:
