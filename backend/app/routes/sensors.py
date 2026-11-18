@@ -324,8 +324,10 @@ async def recent_events(
     newest first, derived from the last `hours` of readings in one query."""
     from app.services.room_events import detect_events
 
-    # The scan reads every raw reading of the window (~260k for 24 h and three nodes), so the
-    # result is shared for EVENTS_TTL_S: every open Resumen asks for the same thing.
+    # Raw telemetry is one reading per second (~260k for 24 h and three nodes). The window is
+    # read from the per-minute rollups instead (CO peak and mean CO₂ of each minute), plus the
+    # few raw readings after a sensor's last rolled-up minute. A sensor without rollups falls
+    # back to its raw readings. The result is also shared for EVENTS_TTL_S.
     cached = _events_cache.get((hours, limit))
     if cached and time.monotonic() - cached[0] < EVENTS_TTL_S:
         return cached[1]
@@ -334,19 +336,33 @@ async def recent_events(
     if not room_of:
         return []
     now = datetime.now(timezone.utc).replace(tzinfo=None)
-    since = (now - timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%S")
+    since_dt = now - timedelta(hours=hours)
+    since = since_dt.strftime("%Y-%m-%dT%H:%M:%S")
+    raw_projection = {"_id": 0, "sensor_id": 1, "timestamp": 1, "co2_ppm": 1, "co_ppm": 1}
+    by_sensor: dict[str, list[dict]] = {sid: [] for sid in room_of}
     try:
-        docs = await db["sensor_readings"].find(
-            {"sensor_id": {"$in": list(room_of)}, "timestamp": {"$gte": since}},
-            {"_id": 0, "sensor_id": 1, "timestamp": 1, "co2_ppm": 1, "co_ppm": 1},
-        ).sort([("sensor_id", 1), ("timestamp", 1)]).to_list(length=None)
+        minutes = await db["reading_minutes"].find(
+            {"sensor_id": {"$in": list(room_of)}, "m": {"$gte": since_dt}, "n": {"$gt": 0}},
+            {"_id": 0, "sensor_id": 1, "m": 1, "co2_s": 1, "co2_n": 1, "co_max": 1},
+        ).sort([("sensor_id", 1), ("m", 1)]).to_list(length=None)
+        last_min: dict[str, datetime] = {}
+        for mdoc in minutes:
+            sid, m = mdoc["sensor_id"], mdoc["m"]
+            by_sensor[sid].append({
+                "timestamp": m.strftime("%Y-%m-%dT%H:%M:%S"),
+                "co_ppm": mdoc.get("co_max"),
+                "co2_ppm": mdoc["co2_s"] / mdoc["co2_n"] if mdoc.get("co2_n") else None,
+            })
+            last_min[sid] = m
+        for sid in room_of:
+            tail_from = (last_min[sid] + timedelta(minutes=1)).strftime("%Y-%m-%dT%H:%M:%S") if sid in last_min else since
+            by_sensor[sid].extend(await db["sensor_readings"].find(
+                {"sensor_id": sid, "timestamp": {"$gte": tail_from}}, raw_projection,
+            ).sort("timestamp", 1).to_list(length=None))
     except PyMongoError as exc:
         logger.error("MongoDB unavailable: %s", exc)
         raise HTTPException(status_code=503, detail="Database unavailable") from exc
 
-    by_sensor: dict[str, list[dict]] = {}
-    for d in docs:
-        by_sensor.setdefault(d["sensor_id"], []).append(d)
     events = [e for sid, rows in by_sensor.items() for e in detect_events(room_of[sid], rows, now)]
     events.sort(key=lambda e: e["timestamp"], reverse=True)
     _events_cache[(hours, limit)] = (time.monotonic(), events[:limit])
