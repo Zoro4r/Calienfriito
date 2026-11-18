@@ -241,14 +241,14 @@ export default function Simulation() {
       </div>
       {error && <p className="text-sm text-red-300">{error}</p>}
 
-      <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 lg:grid-cols-[18rem_minmax(0,1fr)]">
+      <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 lg:grid-cols-[19.5rem_minmax(0,1fr)]">
         <aside className="surface flex min-h-0 flex-col gap-5 overflow-y-auto p-4">
           <div className="flex flex-col gap-2">
             <span className="text-sm text-slate-300">Escenarios</span>
             <div className="grid grid-cols-2 gap-1.5">
               {PRESETS.map(x => (
                 <button key={x.label} type="button" onClick={() => apply(x.p)} aria-pressed={preset === x && active}
-                  className={`h-9 rounded-lg border px-2.5 text-left text-sm transition-colors ${preset === x && active ? 'border-blue-500/60 bg-blue-500/10 text-white' : 'border-slate-800 bg-slate-950 text-slate-300 hover:border-slate-600'}`}>
+                  className={`h-9 whitespace-nowrap rounded-lg border px-2.5 text-left text-sm transition-colors ${preset === x && active ? 'border-blue-500/60 bg-blue-500/10 text-white' : 'border-slate-800 bg-slate-950 text-slate-300 hover:border-slate-600'}`}>
                   {x.label}
                 </button>
               ))}
