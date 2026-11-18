@@ -699,7 +699,8 @@ async def send_demo_reading(
                 "t": body.temperature, "h": body.humidity, "mq135": co2_to_adc(body.co2_ppm),
                 "co": round(body.co_ppm), "dht": body.temperature is not None,
             })
-            if body.manual != _demo_physical.get(body.room_id, False):
+            # First send to the room also cancels any manual order left on the node.
+            if body.manual != _demo_physical.get(body.room_id):
                 await publish_command(body.room_id, override_command("fan" if body.manual else "auto",
                                                                      DEMO_MANUAL_MIN, current_user.username))
             _demo_physical[body.room_id] = body.manual
