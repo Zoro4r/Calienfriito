@@ -21,7 +21,21 @@ def co2_to_adc(co2_ppm: float) -> int:
     return int(round(min(4095, max(0, adc))))
 
 
-def emulate(temperature: float, co2_ppm: float, co_ppm: float) -> dict:
+MIN_CHANGE_S = 60       # firmware's minimum time between state changes (hysteresis)
+
+
+def emulate(temperature: float | None, co2_ppm: float, co_ppm: float, *,
+            manual: bool = False, hold_s: int = 0, hold_temperature: float | None = None) -> dict:
+    """`manual`: a dashboard order forcing the fan on. `hold_s`: a change asked before
+    MIN_CHANGE_S, so the node keeps the state it had at `hold_temperature` for that long.
+    `temperature` None: the DHT stopped answering (3 reads), so the node goes to standby."""
+    if hold_s > 0 and hold_temperature is not None and co_ppm < CO_ALARM_PPM:
+        state = emulate(hold_temperature, co2_ppm, co_ppm)
+        pending = emulate(temperature, co2_ppm, co_ppm)
+        if pending["accion"] != state["accion"] or pending["ventilador_pwm"] != state["ventilador_pwm"]:
+            state.update(bloqueo_s=hold_s, pendiente=pending["accion"],
+                         motivo=f"Cambio antes de {MIN_CHANGE_S} s: espera {hold_s} s")
+        return state
     adc = co2_to_adc(co2_ppm)
     state = {
         "accion": "STANDBY", "alarma_co": False, "ventilador_pwm": 0, "calefactor": False,
@@ -30,6 +44,11 @@ def emulate(temperature: float, co2_ppm: float, co_ppm: float) -> dict:
     if co_ppm >= CO_ALARM_PPM:
         state.update(accion="COOLING", alarma_co=True, ventilador_pwm=255, buzzer=True, led="ROJO",
                      motivo=f"CO {co_ppm:.0f} ppm >= {CO_ALARM_PPM}: alarma")
+    elif temperature is None:
+        state.update(fallo_dht=True, motivo="Sin lectura del DHT (3 seguidas): estado seguro")
+    elif manual:
+        state.update(accion="COOLING", ventilador_pwm=255, led="AZUL", manual=True,
+                     motivo="Orden manual desde el dashboard")
     elif adc < OCCUPIED_ADC:
         state.update(accion="DISABLED", led="APAGADO", motivo="Aula vacia: todo apagado")
     elif temperature < HEAT_ON_C:

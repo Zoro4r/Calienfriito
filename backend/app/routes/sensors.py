@@ -7,7 +7,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pymongo.errors import PyMongoError
 from motor.motor_asyncio import AsyncIOMotorDatabase
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
 from starlette.concurrency import run_in_threadpool
@@ -649,10 +649,13 @@ async def strategy_comparison(
 
 class DemoReadingIn(BaseModel):
     room_id: str
-    temperature: float
-    humidity: float = 55.0
+    temperature: Optional[float]            # None: the DHT does not answer
+    humidity: Optional[float] = 55.0
     co2_ppm: float
     co_ppm: float = 0.0
+    manual: bool = False                    # a dashboard order forces the fan on
+    hold_s: int = Field(0, ge=0, le=60)     # change asked before 60 s: keep the previous state
+    hold_temperature: Optional[float] = None
 
 
 # Demo readings carry the emulated node decision, tagged so they can be told apart and removed.
@@ -682,7 +685,8 @@ async def send_demo_reading(
     )
     if device is None:
         raise HTTPException(status_code=404, detail=f"El aula {body.room_id} no tiene nodo registrado.")
-    node_state = emulate(body.temperature, body.co2_ppm, body.co_ppm)
+    node_state = emulate(body.temperature, body.co2_ppm, body.co_ppm, manual=body.manual,
+                         hold_s=body.hold_s, hold_temperature=body.hold_temperature)
     reading = SensorReading(
         sensor_id=device.id, temperature=body.temperature, humidity=body.humidity,
         co2_ppm=body.co2_ppm, co_ppm=body.co_ppm, is_simulated=True, node_state=node_state,
