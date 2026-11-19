@@ -42,7 +42,7 @@ export default function NodeConnectDialog({ room, onClose }: { room: Room; onClo
         </section>
         <section className="flex flex-col gap-2">
           <h3 className="font-semibold text-white">2. Configura el ESP32</h3>
-          <NodeSetup roomId={room.id} />
+          <NodeSetup roomId={room.id} roomFan={room.fan_type} />
         </section>
         <section className="flex flex-col gap-2">
           <h3 className="font-semibold text-white">3. Estado del nodo</h3>

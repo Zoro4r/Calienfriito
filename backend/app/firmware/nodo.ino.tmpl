@@ -1,7 +1,10 @@
+// Variante: ventilador pequeno de 12 V por PWM (base: nodo de B101).
 // Nodo fisico del aula __AULA__, generado por el dashboard (Aulas -> Nueva aula / Conectar nodo).
 // Es el firmware de ccs/hardware/firmware/src/sketch.ino con los ajustes del hardware real:
 // telemetria y tacometro reales, y envio por internet al servidor con TLS.
-// Ya trae el aula, el servidor, tu WiFi y el umbral de ocupacion del aula (OCCUPANCY_ADC_THRESHOLD).
+// Ya trae el aula, el servidor y tu WiFi.
+// CALIBRACION HISTORICA (2026-11-17): el umbral de ocupacion ya no se ajusta a mano.
+// Se derivo de historial_B101_2026-11-08_2026-11-17.csv (ver "Parametros derivados del historial").
 // Necesita las librerias "DHT sensor library" (Adafruit) y "PubSubClient" (Nick O'Leary).
 
 /*
@@ -33,12 +36,10 @@
  *      calefactor o ambos apagados durante ese tiempo;
  *      {"modo":"auto"} vuelve a la heuristica.
  *      La alarma de CO siempre tiene prioridad sobre el control manual.
- *      Campos opcionales (el backend los envia; ordenes sin ellos siguen valiendo):
- *        "id":"a1b2c3"          se devuelve en la telemetria como comando_id
- *        "autoridad":"predictivo" orden del control predictivo: respeta el intervalo
- *                               minimo y se cancela al perder la conexion MQTT
- *        "expira_utc":1763400000 vencimiento absoluto (s UTC): una orden retenida
- *                               que llega vencida tras un reinicio se rechaza
+ *   6) (Calibracion historica) Ocupacion por MQ-135 con filtro EMA, umbrales
+ *      de entrada/salida distintos y confirmacion temporal (ver constantes).
+ *      Si el DHT11 falla varias lecturas seguidas estando en HEATING, el
+ *      calefactor se apaga (estado seguro).
  *
  *  Formato del log serie:
  *     [  tiempo s] ETIQ  mensaje
@@ -141,9 +142,31 @@ const unsigned long MIN_ON_MS         = 60000UL; // intervalo minimo on/off
 const float HR_ALTA_PCT               = 60.0;    // HR >= 60 %  -> HUMEDO
 const float HR_BAJA_PCT               = 40.0;    // HR <= 40 %  -> SECO
 const int CO_ALARM_PPM                = 50;      // umbral de alarma de CO
-const int CO_ALARM_OFF_PPM            = 40;      // se apaga solo bajo este valor (sin rebote en 50)
-const int DHT_FALLOS_SEGURO           = 3;       // lecturas invalidas seguidas antes del estado seguro
-const int OCCUPANCY_ADC_THRESHOLD     = __OCCUPANCY_THRESHOLD__;     // del dashboard (Infraestructura -> Editar aula); 140 si no se indica
+
+// ------------- Parametros derivados del historial (calibracion estatica) -----
+// Fuente: historial_B101_2026-11-08_2026-11-17.csv (697 015 lecturas unicas a 1 Hz,
+// 2026-11-09 a 2026-11-18 UTC). El ADC del MQ-135 se reconstruyo de co2_ppm con la
+// conversion inversa de este firmware: ADC = (co2_ppm - 400) * 4095 / 1600.
+// Son umbrales OPERATIVOS de este montaje, NO una calibracion fisica del sensor:
+//   - Aula vacia: el ADC esta en 0 el 89 % del tiempo (salida del MQ-135 por debajo
+//     del piso del ADC del ESP32). Fuera de los episodios de ocupacion: p99 = 69,
+//     p99.9 = 146.
+//   - Episodios de ocupacion sostenida (>= 10 min): p1 = 187, p5 = 210, mediana = 261.
+//   - Con el umbral anterior (260, unico) la ocupacion cambiaba ~12 veces por hora,
+//     porque 260 cae justo en la mediana de los episodios ocupados (los log del CSV
+//     muestran 3 477 + 3 266 bloqueos "Histeresis: sigue en ...").
+//   - Simulado sobre el CSV, el esquema de abajo deja 0.08 cambios por hora y
+//     8 episodios de ocupacion (mediana 41 min).
+const int OCCUPANCY_ADC_THRESHOLD     = __OCCUPANCY_THRESHOLD__;     // ENTRA a ocupada: del dashboard (Infraestructura -> Editar aula); 140 si no se indica
+const int OCCUPANCY_ADC_OFF           = OCCUPANCY_ADC_THRESHOLD / 2; // SALE a vacia: mitad del umbral de entrada
+const float MQ135_EMA_ALPHA           = 0.2;     // EMA a 1 Hz: constante de tiempo ~4.5 s (quita picos de 1 muestra)
+const unsigned long OCUPACION_CONFIRMA_ON_MS  = 10000UL; // la condicion debe durar 10 s para ocupar
+const unsigned long OCUPACION_CONFIRMA_OFF_MS = 30000UL; // y 30 s para declarar el aula vacia
+// Seguridad del calefactor PTC (D32): lecturas invalidas seguidas del DHT11 antes de
+// apagarlo. El CSV no registra fallos del DHT11 en B101; 3 es el valor del firmware
+// base del proyecto (nodo.ino.tmpl).
+const int DHT_FALLOS_SEGURO           = 3;
+
 // Conversion SIMULADA del MQ-135 a ppm de CO2 (lineal, 0-4095 -> 400-2000 ppm) para
 // el backend, que estima la ocupacion como (CO2 - 420) / 25 personas. En hardware
 // real se reemplaza por la calibracion en dos puntos (aula vacia / aula llena).
@@ -225,7 +248,6 @@ const char* TOPIC_TELEMETRY = "ccs/" AULA "/telemetry";
 const char* TOPIC_STATUS    = "ccs/" AULA "/status";
 const char* TOPIC_CMD       = "ccs/" AULA "/command";
 const char* TOPIC_CONFIG    = "ccs/" AULA "/config"; // umbrales, retenido (lo lee el monitor del nodo)
-const char* TOPIC_SIM       = "ccs/" AULA "/sim";    // lecturas simuladas desde el dashboard (pagina Simulacion)
 const char* CLIENT_ID_BASE  = "ccs-" AULA "-nodo";
 const unsigned long WIFI_TIMEOUT_MS = 10000UL;
 // Reconexion MQTT cada 5 s fijos (MIN = MAX). Para volver a una espera creciente (RF-11)
@@ -281,21 +303,14 @@ bool manualActivo = false;
 Accion accionManual = ACCION_STANDBY;
 unsigned long manualHastaMs = 0;
 const unsigned long MANUAL_MAX_S = 4UL * 3600UL;   // tope de seguridad: 4 h
-bool ordenPredictiva = false;      // la orden activa viene del control predictivo, no de una persona
-char comandoId[16] = "";           // id de la ultima orden recibida (eco en la telemetria)
-const char* comandoEstado = "";    // aplicado | rechazado | vencido
-int fallosDHT = 0;                 // lecturas invalidas seguidas del DHT
-bool ocupadoActual = false;        // lectura propia del MQ-135, independiente de la accion
 
-// Simulacion desde el dashboard: mientras llegan mensajes a TOPIC_SIM, el nodo usa esos
-// valores en lugar de sus sensores y decide con sus mismas reglas (los actuadores responden).
-// Si deja de recibirlos SIM_TIMEOUT_MS (pagina cerrada, sin red), vuelve a sus sensores.
-const unsigned long SIM_TIMEOUT_MS = 15000UL;
-bool simActiva = false;
-unsigned long simHastaMs = 0;
-float simTempC = 24.0, simHumedad = 55.0;
-int simMq135 = 0, simCoPpm = 0;
-bool simDhtOk = true;
+// Ocupacion estabilizada (calibracion historica): filtro del MQ-135 y estado confirmado.
+float mq135Filtrado = -1.0;        // < 0: todavia sin muestras (la primera inicializa el filtro)
+int mq135Crudo = 0;                // ultima lectura sin filtrar, solo para el log
+bool ocupadoConfirmado = false;    // el arranque parte de "vacia" y espera la confirmacion
+bool cambioOcupacionPendiente = false;
+unsigned long cambioOcupacionDesdeMs = 0;
+int fallosDHT = 0;                 // lecturas invalidas seguidas del DHT11
 
 // ------------------------------- Log -----------------------------------------
 // Toda linea termina en "\r\n" (como Serial.println). Con "\n" solo, la Wokwi
@@ -336,8 +351,9 @@ void imprimirEncabezado() {
                 T_VENTILADOR_ON_C, T_APAGADO_C);
   Serial.printf(" Calefactor: ON con T <= %.1f C, OFF con T >= %.1f C\r\n",
                 T_CALEFACTOR_ON_C, T_APAGADO_C);
-  Serial.printf(" Umbral de ocupacion (MQ-135): %d/4095 | Umbral de CO: %d ppm\r\n",
-                OCCUPANCY_ADC_THRESHOLD, CO_ALARM_PPM);
+  Serial.printf(" Ocupacion (MQ-135 filtrado): entra >= %d (%lu s), sale < %d (%lu s) | Umbral de CO: %d ppm\r\n",
+                OCCUPANCY_ADC_THRESHOLD, OCUPACION_CONFIRMA_ON_MS / 1000,
+                OCCUPANCY_ADC_OFF, OCUPACION_CONFIRMA_OFF_MS / 1000, CO_ALARM_PPM);
   Serial.printf(" Periodo de muestreo y telemetria: %lu s | Bloque CICLO cada %lu s\r\n",
                 PERIODO_LECTURA_MS / 1000, PERIODO_LECTURA_MS * LOG_CADA_N_CICLOS / 1000);
   Serial.println("------------------------------------------------------------------");
@@ -399,21 +415,9 @@ void escribirLed(bool r, bool g, bool b, const char* descripcion) {
 
 // Verde = en espera, Azul = enfriando, Ambar = calentando,
 // Cian = pre-enfriamiento, Apagado = aula vacia,
-// Verde parpadeando = sin lectura del DHT (estado seguro), para no confundirlo con "en espera",
 // Rojo = alarma de CO (prioridad maxima)
-const unsigned long PARPADEO_MS = 500;
-bool ledParpadeo = false;          // el loop alterna el verde cada PARPADEO_MS
-bool parpadeoEncendido = true;
-unsigned long ultimoParpadeoMs = 0;
-
 void setLedEstado(Accion a) {
-  ledParpadeo = false;
   if (alarmaCO) { escribirLed(true, false, false, "ROJO (Alarma CO)"); return; }
-  if (fallosDHT >= DHT_FALLOS_SEGURO) {
-    ledParpadeo = true;
-    escribirLed(false, parpadeoEncendido, false, "VERDE parpadeando (sin lectura del DHT)");
-    return;
-  }
   switch (a) {
     case ACCION_COOLING:     escribirLed(false, false, true,  "AZUL (enfriando)"); break;
     case ACCION_HEATING:     escribirLed(true,  true,  false, "AMBAR (calentando)"); break;
@@ -476,6 +480,39 @@ void aplicarAccion(Accion a) {
   setLedEstado(a);
 }
 
+// ------------------ Ocupacion estabilizada (calibracion historica) -----------
+// EMA del ADC del MQ-135. La primera muestra inicializa el filtro (sin rampa desde 0).
+int filtrarMQ135(int crudo) {
+  if (mq135Filtrado < 0) mq135Filtrado = crudo;
+  else mq135Filtrado += MQ135_EMA_ALPHA * (crudo - mq135Filtrado);
+  return (int)(mq135Filtrado + 0.5f);
+}
+
+// Histeresis de ocupacion: entra con >= OCCUPANCY_ADC_THRESHOLD y sale con
+// < OCCUPANCY_ADC_OFF; cada cambio debe sostenerse OCUPACION_CONFIRMA_*_MS.
+// No bloquea: solo compara millis() en cada ciclo.
+bool evaluarOcupacion(int mq135f) {
+  bool propuesta = ocupadoConfirmado ? (mq135f >= OCCUPANCY_ADC_OFF)
+                                     : (mq135f >= OCCUPANCY_ADC_THRESHOLD);
+  if (propuesta == ocupadoConfirmado) {
+    cambioOcupacionPendiente = false;
+    return ocupadoConfirmado;
+  }
+  unsigned long ahora = millis();
+  if (!cambioOcupacionPendiente) {
+    cambioOcupacionPendiente = true;
+    cambioOcupacionDesdeMs = ahora;
+  }
+  unsigned long confirma = propuesta ? OCUPACION_CONFIRMA_ON_MS : OCUPACION_CONFIRMA_OFF_MS;
+  if (ahora - cambioOcupacionDesdeMs >= confirma) {
+    ocupadoConfirmado = propuesta;
+    cambioOcupacionPendiente = false;
+    LOG("EVT", "Ocupacion confirmada: AULA %s (MQ-135 filtrado %d, entra >= %d, sale < %d)",
+        propuesta ? "OCUPADA" : "VACIA", mq135f, OCCUPANCY_ADC_THRESHOLD, OCCUPANCY_ADC_OFF);
+  }
+  return ocupadoConfirmado;
+}
+
 // --------------------- Heuristica con histeresis -----------------------------
 // El ventilador gira en COOLING y PRE_COOLING; esta apagado en STANDBY y DISABLED.
 bool ventiladorEncendido(Accion a) {
@@ -493,8 +530,9 @@ Accion decidirHeuristica(float tempC, bool ocupado) {
 
   if (!ocupado) {
     propuesta = ACCION_DISABLED;
+    // Con histeresis: vacia hasta superar OCCUPANCY_ADC_THRESHOLD (o bajar de OCCUPANCY_ADC_OFF) de forma sostenida.
     snprintf(motivoDecision, sizeof(motivoDecision),
-             "Aula vacia (MQ-135 < %d)", OCCUPANCY_ADC_THRESHOLD);
+             "Aula vacia (MQ-135 < %d o sin confirmar)", OCCUPANCY_ADC_THRESHOLD);
   } else if (tempC >= T_VENTILADOR_ON_C) {
     propuesta = ACCION_COOLING;
     snprintf(motivoDecision, sizeof(motivoDecision),
@@ -573,77 +611,34 @@ String valorJson(const String& json, const char* clave) {
 }
 
 // Comando del dashboard (RF-26). Llega retenido: tras un reinicio el nodo recupera
-// el ultimo comando (RF-12). Si trae expira_utc y el reloj NTP es valido, solo aplica
-// el tiempo que le queda; si ya vencio, lo rechaza (no revive una orden antigua).
-// Lecturas simuladas: {"t":25.2,"h":59,"mq135":2431,"co":1,"dht":true} o {"fin":true}.
-void aplicarSimulacion(const String& msg) {
-  if (msg.length() == 0 || valorJson(msg, "fin") == "true") {
-    if (simActiva) LOG("EVT", "Simulacion terminada: vuelven los sensores reales");
-    simActiva = false;
-    return;
-  }
-  simDhtOk = valorJson(msg, "dht") != "false";
-  simTempC = valorJson(msg, "t").toFloat();
-  simHumedad = valorJson(msg, "h").toFloat();
-  simMq135 = constrain(valorJson(msg, "mq135").toInt(), 0, 4095);
-  simCoPpm = constrain(valorJson(msg, "co").toInt(), 0, 1000);
-  if (!simActiva) LOG("EVT", "Simulacion desde el dashboard: el nodo usa las lecturas recibidas");
-  simActiva = true;
-  simHastaMs = millis() + SIM_TIMEOUT_MS;
-}
-
+// el ultimo comando (RF-12) y vuelve a aplicar su duracion completa.
 void onMqttMessage(char* topic, byte* payload, unsigned int length) {
   String msg;
   for (unsigned int i = 0; i < length; i++) msg += (char)payload[i];
-  if (strcmp(topic, TOPIC_SIM) == 0) { aplicarSimulacion(msg); return; }
   LOG("RED", "Comando recibido en %s: %s", topic, msg.c_str());
 
   String modo = valorJson(msg, "modo");
   if (modo == "auto" || msg.length() == 0) {
     if (manualActivo) LOG("EVT", "Control manual desactivado: vuelve la heuristica");
     manualActivo = false;
-    ordenPredictiva = false;
     return;
   }
-  String id = valorJson(msg, "id");
-  id.toCharArray(comandoId, sizeof(comandoId));
   if (modo != "manual") {
     LOG("RED", "Comando ignorado: modo desconocido");
-    comandoEstado = "rechazado";
     return;
   }
   String accion = valorJson(msg, "accion");
   unsigned long duracion = (unsigned long)valorJson(msg, "duracion_s").toInt();
   if (duracion == 0 || duracion > MANUAL_MAX_S) duracion = min(duracion == 0 ? 900UL : duracion, MANUAL_MAX_S);
-  long expira = valorJson(msg, "expira_utc").toInt();
-  time_t ahoraUtc = time(nullptr);
-  if (expira > 0 && ahoraUtc > 1700000000L) {          // reloj NTP valido (despues de 2023)
-    if ((long)ahoraUtc >= expira) {
-      LOG("RED", "Comando rechazado: vencio hace %ld s", (long)ahoraUtc - expira);
-      comandoEstado = "vencido";
-      return;
-    }
-    duracion = min(duracion, (unsigned long)(expira - (long)ahoraUtc));
-  }
-  Accion pedida;
-  if (accion == "COOLING") pedida = ACCION_COOLING;
-  else if (accion == "HEATING") pedida = ACCION_HEATING;
-  else if (accion == "STANDBY") pedida = ACCION_STANDBY;
-  else { LOG("RED", "Comando ignorado: accion manual no soportada"); comandoEstado = "rechazado"; return; }
-  bool predictiva = valorJson(msg, "autoridad") == "predictivo";
-  if (predictiva && pedida == ACCION_HEATING) {
-    LOG("RED", "Comando rechazado: el control predictivo no puede encender el calefactor");
-    comandoEstado = "rechazado";
-    return;
-  }
-  accionManual = pedida;
-  ordenPredictiva = predictiva;
+  if (accion == "COOLING") accionManual = ACCION_COOLING;
+  else if (accion == "HEATING") accionManual = ACCION_HEATING;
+  else if (accion == "STANDBY") accionManual = ACCION_STANDBY;
+  else { LOG("RED", "Comando ignorado: accion manual no soportada"); return; }
   int nivel = valorJson(msg, "nivel").toInt();
   nivelManual = (nivel >= 20 && nivel <= 100) ? nivel : 100;
   manualActivo = true;
   manualHastaMs = millis() + duracion * 1000UL;
-  comandoEstado = "aplicado";
-  LOG("EVT", "Control %s: %s durante %lu s", predictiva ? "predictivo" : "manual", nombreAccion(accionManual), duracion);
+  LOG("EVT", "Control manual: %s durante %lu s", nombreAccion(accionManual), duracion);
 }
 
 void intentarWiFi() {
@@ -703,7 +698,6 @@ void intentarMQTT() {
     mqttEsperaMs = mqttProximaEsperaMs = MQTT_RETRY_MIN_MS;
     mqtt.publish(TOPIC_STATUS, "online", true);
     mqtt.subscribe(TOPIC_CMD, 1);
-    mqtt.subscribe(TOPIC_SIM, 0);
     publicarConfig();
     LOG("RED", "MQTT conectado a %s:%d | cliente %s", MQTT_HOST, MQTT_PORT, clientId.c_str());
     LOG("RED", "Publica en %s | suscrito a %s", TOPIC_TELEMETRY, TOPIC_CMD);
@@ -761,23 +755,18 @@ void publicarTelemetria(bool dhtOk, float tempC, float humedad, int mq135, int m
     inaDisponible = false;
   }
 #endif
-  char buf[1000]; // cabe en el buffer MQTT fijado con setBufferSize en setup() (1024)
+  char buf[850]; // cabe en el buffer MQTT fijado con setBufferSize en setup()
   const int n = snprintf(buf, sizeof(buf),
     "{\"ciclo\":%lu,\"uptime_s\":%.1f,\"temp_c\":%s,\"humedad\":%s,\"co2_proxy\":%d,\"co2_ppm\":%.0f,"
     "\"co_ppm\":%d,\"accion\":\"%s\",\"alarma_co\":%s,\"ventilador_pwm\":%d,\"ventilador_rpm\":%d,"
     "\"calefactor\":%s,\"buzzer\":%s,\"led\":\"%s\",\"motivo\":\"%s\","
-    "\"bloqueo_s\":%lu,\"pendiente\":\"%s\",\"manual\":%s,\"manual_restante_s\":%lu,\"is_simulated\":%s%s,"
-    "\"umbral_ocupacion\":%d,\"simulacion\":%s,"
-    "\"ocupado\":%s,\"autoridad\":\"%s\",\"comando_id\":\"%s\",\"comando_estado\":\"%s\",\"fallo_dht\":%s}",
+    "\"bloqueo_s\":%lu,\"pendiente\":\"%s\",\"manual\":%s,\"manual_restante_s\":%lu,\"is_simulated\":%s%s}",
     numeroCiclo, millis() / 1000.0, temp, hum, mq135, co2ppm, mq7ppm, nombreAccion(accionActual),
     alarmaCO ? "true" : "false", dutyVentilador, rpmVentilador,
     calefactorEncendido ? "true" : "false", buzzerEncendido ? "true" : "false",
     colorLed, motivo, bloqueoSegundos, bloqueoSegundos ? nombreAccion(accionPendiente) : "",
     manualActivo ? "true" : "false", manualActivo ? (manualHastaMs - millis() + 999) / 1000 : 0UL,
-    TELEMETRIA_SIMULADA || simActiva ? "true" : "false", inaJson,
-    OCCUPANCY_ADC_THRESHOLD, simActiva ? "true" : "false",
-    ocupadoActual ? "true" : "false", manualActivo ? (ordenPredictiva ? "predictivo" : "manual") : "local",
-    comandoId, comandoEstado, fallosDHT >= DHT_FALLOS_SEGURO ? "true" : "false");
+    TELEMETRIA_SIMULADA ? "true" : "false", inaJson);
   if (n < 0 || n >= (int)sizeof(buf)) {
     LOG("RED", "Telemetria demasiado larga; no se publica truncada");
     return;
@@ -826,12 +815,13 @@ void imprimirBloqueCiclo(bool dhtOk, float tempC, float humedad,
   } else {
     Serial.printf("|   %-11ssin lectura\r\n", "DHT11");
   }
+  // ADC filtrado (el que decide) y crudo entre parentesis, con ambos umbrales.
   if (ocupado) {
-    Serial.printf("|   %-11sADC %4d/4095   AULA OCUPADA (ADC >= %d)\r\n", "MQ-135", mq135,
-                  OCCUPANCY_ADC_THRESHOLD);
+    Serial.printf("|   %-11sADC %4d/4095 (crudo %4d)   AULA OCUPADA (sale < %d)\r\n", "MQ-135", mq135,
+                  mq135Crudo, OCCUPANCY_ADC_OFF);
   } else {
-    Serial.printf("|   %-11sADC %4d/4095   AULA VACIA (ADC < %d)\r\n", "MQ-135", mq135,
-                  OCCUPANCY_ADC_THRESHOLD);
+    Serial.printf("|   %-11sADC %4d/4095 (crudo %4d)   AULA VACIA (entra >= %d)\r\n", "MQ-135", mq135,
+                  mq135Crudo, OCCUPANCY_ADC_THRESHOLD);
   }
   if (alarmaCO) {
     Serial.printf("|   %-11sCO = %d ppm   ALARMA (CO >= %d ppm)\r\n", "MQ-7", mq7ppm,
@@ -926,13 +916,6 @@ void setup() {
 
 // ---------------------------------- loop ----------------------------------------
 void loop() {
-  // Parpadeo del LED verde (DHT caido): independiente del periodo de lectura de 1 s.
-  if (ledParpadeo && millis() - ultimoParpadeoMs >= PARPADEO_MS) {
-    ultimoParpadeoMs = millis();
-    parpadeoEncendido = !parpadeoEncendido;
-    digitalWrite(LED_G_PIN, parpadeoEncendido ? HIGH : LOW);
-    ledVerdeOn = parpadeoEncendido;
-  }
   if (wifiOk) {
     intentarMQTT(); // no bloquea: respeta su propio temporizador de reintento
     mqtt.loop();
@@ -942,33 +925,22 @@ void loop() {
   ultimaLecturaMs = millis();
 
   // --- 1. Lectura de sensores ---
-  int mq135  = analogRead(MQ135_PIN);          // 0-4095, proxy de CO2/ocupacion
+  // MQ-135: se filtra (EMA) y la ocupacion usa histeresis con confirmacion temporal.
+  // El valor filtrado es el que se decide, se registra y se publica (co2_proxy/co2_ppm).
+  mq135Crudo = analogRead(MQ135_PIN);          // 0-4095, proxy de CO2/ocupacion
+  int mq135  = filtrarMQ135(mq135Crudo);
   int mq7Raw = analogRead(MQ7_PIN);            // 0-4095
   int mq7ppm = map(mq7Raw, 0, 4095, 0, 150);   // mapeo SIMPLIFICADO para simular;
                                                // en hardware real usar la curva
                                                // de calibracion del MQ-7
+  bool ocupado = evaluarOcupacion(mq135);
   float tempC   = dht.readTemperature();
   float humedad = dht.readHumidity();
-  // Simulacion desde el dashboard: reemplaza las lecturas (las reglas no cambian).
-  if (simActiva && (long)(millis() - simHastaMs) >= 0) {
-    simActiva = false;
-    LOG("EVT", "Simulacion sin mensajes por %lu s: vuelven los sensores reales", SIM_TIMEOUT_MS / 1000);
-  }
-  if (simActiva) {
-    mq135 = simMq135;
-    mq7ppm = simCoPpm;
-    tempC = simDhtOk ? simTempC : NAN;
-    humedad = simDhtOk ? simHumedad : NAN;
-  }
-  bool ocupado = mq135 >= OCCUPANCY_ADC_THRESHOLD;
-  ocupadoActual = ocupado;
   bool dhtOk = !isnan(tempC) && !isnan(humedad);
   fallosDHT = dhtOk ? 0 : min(fallosDHT + 1, 1000);
 
   // --- 2. Seguridad: alarma de CO, evaluada antes que el control de clima ---
-  // Se enciende en CO_ALARM_PPM y se apaga bajo CO_ALARM_OFF_PPM: el ruido del ADC
-  // alrededor de 50 ppm no hace sonar el buzzer a intervalos.
-  alarmaCO = alarmaCO ? (mq7ppm >= CO_ALARM_OFF_PPM) : (mq7ppm >= CO_ALARM_PPM);
+  alarmaCO = (mq7ppm >= CO_ALARM_PPM);
   if (alarmaCO && !alarmaCOPrevia) {
     LOG("EVT", "ALARMA DE CO ACTIVADA: %d ppm >= %d ppm. Ventilador forzado al 100%%, calefactor OFF y buzzer ON",
         mq7ppm, CO_ALARM_PPM);
@@ -983,18 +955,7 @@ void loop() {
   bloqueoSegundos = 0;
   if (manualActivo && (long)(millis() - manualHastaMs) >= 0) {
     manualActivo = false;
-    comandoEstado = "vencido";
     LOG("EVT", "Control manual vencido: vuelve la heuristica");
-  }
-  // Una orden predictiva solo vale mientras el servidor que la dio sigue presente.
-  if (manualActivo && ordenPredictiva && !mqtt.connected()) {
-    manualActivo = false;
-    LOG("EVT", "Sin conexion MQTT: se cancela la orden predictiva y vuelve la heuristica");
-  }
-  // Sin temperatura no hay realimentacion: una orden de calefactor no sigue a ciegas.
-  if (manualActivo && accionManual == ACCION_HEATING && fallosDHT >= DHT_FALLOS_SEGURO) {
-    manualActivo = false;
-    LOG("EVT", "Sin lectura del DHT11: se cancela la orden de calefactor");
   }
   if (alarmaCO) {
     snprintf(motivoDecision, sizeof(motivoDecision),
@@ -1007,39 +968,25 @@ void loop() {
              accionManual == ACCION_COOLING ? (nivelManual < 100 ? "ventilador ON (potencia reducida)" : "ventilador ON")
              : accionManual == ACCION_HEATING ? "calefactor ON" : "ventilador y calefactor OFF",
              restante);
-    bool cambiaActuador =
-        ventiladorEncendido(accionManual) != ventiladorEncendido(accionActual) ||
-        calefactorActivo(accionManual) != calefactorActivo(accionActual);
-    unsigned long transcurrido = millis() - ultimoCambioMs;
-    if (accionManual != accionActual && ordenPredictiva && cambiaActuador &&
-        huboCambioActuador && transcurrido < MIN_ON_MS) {
-      // La orden predictiva respeta el intervalo minimo, como las reglas;
-      // la de una persona es explicita y se aplica al instante.
-      bloqueoSegundos = (MIN_ON_MS - transcurrido + 999) / 1000;
-      accionPendiente = accionManual;
-      snprintf(motivoDecision, sizeof(motivoDecision),
-               "Orden predictiva: sigue en %s, pasa a %s en %lu s (minimo %lu s)",
-               nombreAccion(accionActual), nombreAccion(accionManual), bloqueoSegundos, MIN_ON_MS / 1000);
-    } else if (accionManual != accionActual) {
-      LOG("EVT", "Transicion de estado (%s): %s -> %s", ordenPredictiva ? "predictivo" : "manual",
+    if (accionManual != accionActual) {
+      LOG("EVT", "Transicion de estado (manual): %s -> %s",
           nombreAccion(accionActual), nombreAccion(accionManual));
       accionActual = accionManual;
       ultimoCambioMs = millis();
       huboCambioActuador = true;
     }
-  } else if (!dhtOk && fallosDHT >= DHT_FALLOS_SEGURO) {
-    // Estado seguro: sin temperatura no se calienta ni se enfria a ciegas.
+  } else if (!dhtOk && fallosDHT >= DHT_FALLOS_SEGURO && accionActual == ACCION_HEATING) {
+    // Seguridad del PTC: sin temperatura no se sigue calentando a ciegas.
+    // No espera MIN_ON_MS: apagar el calefactor es la accion segura.
     snprintf(motivoDecision, sizeof(motivoDecision),
-             "Fallo del DHT11 (%d lecturas): control termico detenido", fallosDHT);
-    if (accionActual == ACCION_HEATING || accionActual == ACCION_COOLING || accionActual == ACCION_PRE_COOLING) {
-      LOG("EVT", "Fallo del DHT11: %s -> STANDBY (estado seguro)", nombreAccion(accionActual));
-      accionActual = ACCION_STANDBY;
-      ultimoCambioMs = millis();
-      huboCambioActuador = true;
-    }
+             "Fallo del DHT11 (%d lecturas): calefactor OFF por seguridad", fallosDHT);
+    LOG("EVT", "Fallo del DHT11: HEATING -> STANDBY (estado seguro)");
+    accionActual = ACCION_STANDBY;
+    ultimoCambioMs = millis();
+    huboCambioActuador = true;
   } else if (!dhtOk) {
     snprintf(motivoDecision, sizeof(motivoDecision),
-             "Sin lectura del DHT11: se mantiene el ultimo estado (%d de %d)", fallosDHT, DHT_FALLOS_SEGURO);
+             "Sin lectura del DHT11: se mantiene el ultimo estado");
   } else {
     float co2ppm = CO2_PPM_MIN + mq135 * (CO2_PPM_MAX - CO2_PPM_MIN) / 4095.0;
     actualizarNivelReglas(tempC, co2ppm);

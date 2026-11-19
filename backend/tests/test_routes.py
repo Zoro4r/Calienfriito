@@ -143,9 +143,26 @@ def test_node_firmware_carries_room_occupancy_threshold(as_role, monkeypatch):
     from app.routes import admin as admin_routes
     monkeypatch.setattr(admin_routes, "NODE_MQTT_HOST", "broker.example")
     as_role("admin")
-    _rooms_db(types.SimpleNamespace(occupancy_threshold=310))
+    _rooms_db(types.SimpleNamespace(occupancy_threshold=310, fan_type="pwm_12v"))
     code = client.get("/api/v1/admin/node-firmware", params={"room": "B101"}).text
     assert "OCCUPANCY_ADC_THRESHOLD     = 310;" in code
+
+
+@pytest.mark.parametrize("room_fan, query, plug", [
+    (None, None, False),                 # unregistered room: 12 V PWM fan
+    ("smart_plug", None, True),          # the room's fan type decides
+    ("smart_plug", "pwm_12v", False),    # an explicit choice wins
+    ("pwm_12v", "smart_plug", True),
+])
+def test_node_firmware_variant_follows_fan(as_role, monkeypatch, room_fan, query, plug):
+    from app.routes import admin as admin_routes
+    monkeypatch.setattr(admin_routes, "NODE_MQTT_HOST", "broker.example")
+    as_role("admin")
+    _rooms_db(types.SimpleNamespace(occupancy_threshold=140, fan_type=room_fan) if room_fan else None)
+    params = {"room": "B101", **({"fan": query} if query else {})}
+    code = client.get("/api/v1/admin/node-firmware", params=params).text
+    assert ("#define FAN_PWM_PIN  -1" in code) == plug
+    assert '#define AULA "B101"' in code and "__AULA__" not in code and "__OCCUPANCY_THRESHOLD__" not in code
 
 
 @pytest.mark.parametrize("room", ["B 101", "B#1", "ccs/+", "x" * 21])

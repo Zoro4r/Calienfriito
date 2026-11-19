@@ -746,6 +746,9 @@ class NodeConfigOut(BaseModel):
 # The node firmware, as a template: the room and broker are filled in here, and the WiFi and
 # broker password in the browser (they never reach the server). Room codes become MQTT topics.
 NODE_FIRMWARE = Path(__file__).resolve().parent.parent / "firmware" / "nodo.ino.tmpl"
+# Same thermal node for a room whose fan hangs from a smart plug: it drives no fan pin; the
+# server switches the plug from the decision the node publishes (services/smart_plug.py).
+NODE_FIRMWARE_PLUG = Path(__file__).resolve().parent.parent / "firmware" / "nodo_enchufe.ino.tmpl"
 CAMERA_FIRMWARE = Path(__file__).resolve().parent.parent / "firmware" / "camara.ino.tmpl"
 ROOM_CODE = re.compile(r"^[A-Za-z0-9_-]{1,20}$")
 
@@ -758,23 +761,30 @@ ROOM_CODE = re.compile(r"^[A-Za-z0-9_-]{1,20}$")
 def node_firmware(
     room: str = Query(..., description="Room code, used as AULA on the node"),
     kind: str = Query("thermal", pattern="^(thermal|camera)$"),
+    fan: Optional[str] = Query(None, pattern="^(pwm_12v|smart_plug)$",
+                               description="Thermal node variant; defaults to the room's fan type"),
     db: Session = Depends(get_db_sql),
     current_user: User = Depends(get_current_user),
 ):
     """Firmware for one room. `kind=camera` downloads the ESP32-CAM occupancy publisher.
-    The thermal firmware carries the room's occupancy threshold (140 if the room is not registered)."""
+    The thermal firmware carries the room's occupancy threshold (140 if the room is not registered)
+    and comes in two variants: a 12 V PWM fan on the node, or a fan behind a smart plug."""
     _require_admin(current_user)
     if not ROOM_CODE.match(room):
         raise HTTPException(status_code=422, detail="Room code must be 1-20 letters, digits, - or _.")
     if not NODE_MQTT_HOST:
         raise HTTPException(status_code=409, detail="This server has no public broker for nodes (NODE_MQTT_HOST).")
-    source = CAMERA_FIRMWARE if kind == "camera" else NODE_FIRMWARE
+    registered = db.query(Room).filter(Room.id == room).first()
+    fan = fan or (registered.fan_type if registered else None) or "pwm_12v"
+    if kind == "camera":
+        source = CAMERA_FIRMWARE
+    else:
+        source = NODE_FIRMWARE_PLUG if fan == "smart_plug" else NODE_FIRMWARE
     code = source.read_text(encoding="utf-8")
     thermal_code = NODE_FIRMWARE.read_text(encoding="utf-8")
     ca_start = thermal_code.find('R"PEM(')
     ca_end = thermal_code.find(')PEM"', ca_start)
     root_ca = thermal_code[ca_start + len('R"PEM('):ca_end] if ca_start >= 0 and ca_end > ca_start else ""
-    registered = db.query(Room).filter(Room.id == room).first()
     threshold = (registered.occupancy_threshold if registered else None) or DEFAULT_OCCUPANCY_THRESHOLD
     for token, value in (("__AULA__", room), ("__MQTT_HOST__", NODE_MQTT_HOST),
                          ("__MQTT_PORT__", str(NODE_MQTT_PORT)), ("__MQTT_USER__", NODE_MQTT_USER),

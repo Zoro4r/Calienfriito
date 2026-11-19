@@ -71,6 +71,9 @@ export async function ensureNodeSensor(roomId: string) {
 // tachometer or heater (pin -1: the firmware leaves them alone; RPM is estimated from the power).
 type Board = 'kit' | 'pcb'
 type NodeKind = 'thermal' | 'camera'
+// Which fan the thermal node drives: the small 12 V fan on its own PWM pin, or a bigger one behind
+// a smart plug that the server switches from the node's decision (the node has no fan pin then).
+export type FanType = 'pwm_12v' | 'smart_plug'
 const PCB_PINS: Record<string, number> = {
   DHTPIN: 13, LED_R_PIN: 32, LED_G_PIN: 33, LED_B_PIN: 25, BUZZER_PIN: 26,
   FAN_PWM_PIN: 19, FAN_TACH_PIN: -1, HEATER_PIN: -1, MQ135_PIN: 34, MQ7_PIN: 35,
@@ -91,9 +94,11 @@ const cString = (s: string) => s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
  * The node program, ready to upload: the server fills in the room and broker; the WiFi and the
  * broker password are typed here and written into the file in the browser (never sent or stored).
  */
-export function NodeSetup({ roomId }: { roomId: string }) {
+export function NodeSetup({ roomId, roomFan }: { roomId: string; roomFan?: FanType }) {
   const [template, setTemplate] = useState<string | null | undefined>(undefined)
   const [nodeKind, setNodeKind] = useState<NodeKind>('thermal')
+  // Starts on the room's fan type; changing it here only changes the program downloaded.
+  const [fan, setFan] = useState<FanType>(roomFan ?? 'pwm_12v')
   const [ssid, setSsid] = useState('')
   const [wifiPass, setWifiPass] = useState('')
   const [mqttPass, setMqttPass] = useState('')
@@ -103,9 +108,9 @@ export function NodeSetup({ roomId }: { roomId: string }) {
 
   useEffect(() => {
     setTemplate(undefined)
-    api.get<string>('/admin/node-firmware', { params: { room: roomId, kind: nodeKind }, responseType: 'text', transformResponse: r => r })
+    api.get<string>('/admin/node-firmware', { params: { room: roomId, kind: nodeKind, fan }, responseType: 'text', transformResponse: r => r })
       .then(r => setTemplate(r.data)).catch(() => setTemplate(null))
-  }, [roomId, nodeKind])
+  }, [roomId, nodeKind, fan])
 
   if (template === undefined) return <p className="text-sm text-slate-400">Preparando el programa del nodo…</p>
   if (template === null) return <p className="text-sm text-slate-400">Este servidor no tiene un broker público para nodos (falta NODE_MQTT_HOST en su configuración).</p>
@@ -116,7 +121,9 @@ export function NodeSetup({ roomId }: { roomId: string }) {
     .replace('__WIFI_SSID__', () => cString(ssid.trim()))
     .replace('__WIFI_PASS__', () => cString(wifiPass))
     .replace('__MQTT_PASS__', () => cString(mqttPass))
-  const code = nodeKind === 'thermal' ? withBoard(base, board) : base
+  const plug = nodeKind === 'thermal' && fan === 'smart_plug'
+  // The smart plug program is the breadboard build without a fan: no board choice.
+  const code = nodeKind === 'thermal' && !plug ? withBoard(base, board) : base
 
   function download() {
     const url = URL.createObjectURL(new Blob([code], { type: 'text/plain' }))
@@ -142,6 +149,21 @@ export function NodeSetup({ roomId }: { roomId: string }) {
         </span>
       </div>
       {nodeKind === 'thermal' && <div className="flex flex-wrap items-center gap-3">
+        <span className="text-xs text-slate-400">Ventilador</span>
+        <div className="segmented flex p-0.5" role="radiogroup" aria-label="Ventilador del aula">
+          {([['pwm_12v', 'Pequeño (12 V)'], ['smart_plug', 'Enchufe inteligente']] as const).map(([v, label]) => (
+            <button key={v} type="button" role="radio" aria-checked={fan === v} onClick={() => setFan(v)}
+              className={`segmented-item px-3 py-1 text-xs ${fan === v ? 'segmented-item-active' : ''}`}>{label}</button>
+          ))}
+        </div>
+        <span className="text-xs text-slate-500">
+          {plug
+            ? 'El nodo decide y el servidor enciende o apaga el enchufe; el ESP32 no lleva ventilador.'
+            : 'El ESP32 regula el ventilador de 12 V por PWM.'}
+          {roomFan && fan !== roomFan && ' El aula está configurada con el otro tipo: cámbialo en Editar aula para que coincidan.'}
+        </span>
+      </div>}
+      {nodeKind === 'thermal' && !plug && <div className="flex flex-wrap items-center gap-3">
         <span className="text-xs text-slate-400">Placa</span>
         <div className="segmented flex p-0.5" role="radiogroup" aria-label="Placa del nodo">
           {([['kit', 'Protoboard'], ['pcb', 'PCB']] as const).map(([v, label]) => (
@@ -174,9 +196,14 @@ export function NodeSetup({ roomId }: { roomId: string }) {
           <li>Conecta el programador MB/USB-TTL, mantén <b className={b}>GPIO0</b> a GND durante la carga y retíralo al reiniciar.</li>
           <li>Enciéndela con el aula vacía o ajusta INITIAL_PEOPLE_COUNT. El conteo se reinicia al arrancar y requiere paso de una persona a la vez.</li>
         </> : <>
-          <li>Ábrelo en el <b className={b}>Arduino IDE</b>, placa <b className={b}>ESP32 Dev Module</b>. Librerías: DHT sensor library, PubSubClient{board === 'pcb' ? ' y Adafruit INA219' : ''}.</li>
-          <li>Con los 12 V y OUT+ desconectados, conecta el USB y pulsa <b className={b}>Subir</b> (<b className={b}>BOOT</b> si se queda en "Connecting…").</li>
-          <li>Quita el USB, pon OUT+ en el riel y enchufa los 12 V.</li>
+          <li>Ábrelo en el <b className={b}>Arduino IDE</b>, placa <b className={b}>ESP32 Dev Module</b>. Librerías: DHT sensor library, PubSubClient{!plug && board === 'pcb' ? ' y Adafruit INA219' : ''}.</li>
+          {plug ? <>
+            <li>Conecta el USB y pulsa <b className={b}>Subir</b> (<b className={b}>BOOT</b> si se queda en "Connecting…").</li>
+            <li>Enchufa el ventilador al enchufe inteligente. El servidor lo enciende o apaga cuando el nodo decide enfriar.</li>
+          </> : <>
+            <li>Con los 12 V y OUT+ desconectados, conecta el USB y pulsa <b className={b}>Subir</b> (<b className={b}>BOOT</b> si se queda en "Connecting…").</li>
+            <li>Quita el USB, pon OUT+ en el riel y enchufa los 12 V.</li>
+          </>}
         </>}
       </ol>
     </div>
