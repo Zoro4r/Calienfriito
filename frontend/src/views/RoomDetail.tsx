@@ -456,7 +456,11 @@ export default function RoomDetail() {
           <RoomInfra
             room={room}
             notify={notify}
-            onRenamed={newId => navigate(`/aulas/${encodeURIComponent(newId)}?tab=hardware`, { replace: true })}
+            onRenamed={newId => {
+              // Same code: the URL does not change, so the room is re-read to show what was saved.
+              if (newId === id) api.get<RoomInfo>(`/admin/rooms/${encodeURIComponent(newId)}`).then(r => setRoom(r.data)).catch(() => {})
+              else navigate(`/aulas/${encodeURIComponent(newId)}?tab=hardware`, { replace: true })
+            }}
             onDeleted={() => navigate('/aulas', { replace: true })}
           />
         </div>
