@@ -22,7 +22,7 @@ from app.models.admin import Room, Schedule, SensorDevice, Reservation, User, ST
 from app.models.common import ErrorDetail
 from app.dependencies import get_current_user
 from app.services.predictive_service import calculate_cooling_demand
-from app.services.mqtt_ingest import publish_room_threshold
+from app.services.mqtt_ingest import publish_room_settings
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -369,7 +369,7 @@ def create_room(
         logger.error("DB error creating room: %s", exc)
         raise HTTPException(status_code=503, detail="Database unavailable") from exc
     logger.info("Admin '%s' created room '%s' (%s).", current_user.username, room.id, room.name)
-    background.add_task(publish_room_threshold, room.id, room.occupancy_threshold)
+    background.add_task(publish_room_settings, room.id, room.occupancy_threshold, room.target_temp)
     return _room_out(room)
 
 
@@ -443,7 +443,7 @@ def update_room(
                 "Admin '%s' renamed room '%s' → '%s' (cascade_sensors=%s, cascade_reservations=%s).",
                 current_user.username, room_id, new_id, cascade_sensors, cascade_reservations,
             )
-            background.add_task(publish_room_threshold, new_id, new_room.occupancy_threshold)
+            background.add_task(publish_room_settings, new_id, new_room.occupancy_threshold, new_room.target_temp)
             return _room_out(new_room)
 
         # Normal update — no PK change
@@ -468,7 +468,7 @@ def update_room(
 
     logger.info("Admin '%s' updated room '%s'.", current_user.username, room.id)
     # Takes effect on the node at once (retained): no reprogramming needed.
-    background.add_task(publish_room_threshold, room.id, room.occupancy_threshold)
+    background.add_task(publish_room_settings, room.id, room.occupancy_threshold, room.target_temp)
     return _room_out(room)
 
 

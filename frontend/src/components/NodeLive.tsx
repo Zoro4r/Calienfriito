@@ -43,12 +43,22 @@ const LED_COLOR: Record<string, string> = {
 export const stateKey = (n?: NodeState | null) =>
   !n?.accion ? null : n.alarma_co ? 'ALARMA' : n.manual ? 'MANUAL' : n.accion
 
+// ── The node's thermal band ───────────────────────────────────────────────────
+// What the node reports it is using (it follows the room's target temperature); FW defaults
+// for a program too old to report it.
+export interface ThermalBand { setpoint: number; coolOn: number; heatOn: number; fan75At: number; fan100At: number }
+export const DEFAULT_BAND: ThermalBand = { setpoint: FW.setpoint, coolOn: FW.coolOn, heatOn: FW.heatOn, fan75At: FW.fan75At, fan100At: FW.fan100At }
+export const nodeBand = (ns?: Pick<NodeState, 'setpoint_c' | 't_enfriar_c' | 't_calentar_c' | 't_nivel_75_c' | 't_nivel_100_c'> | null): ThermalBand => ({
+  setpoint: ns?.setpoint_c ?? FW.setpoint, coolOn: ns?.t_enfriar_c ?? FW.coolOn, heatOn: ns?.t_calentar_c ?? FW.heatOn,
+  fan75At: ns?.t_nivel_75_c ?? FW.fan75At, fan100At: ns?.t_nivel_100_c ?? FW.fan100At,
+})
+
 // ── Bands, as the firmware names them ─────────────────────────────────────────
 export type Band = { text: string; tone: Tone }
-export const tempBand = (t: number): Band =>
-  t >= FW.coolOn ? { text: `Cálido (≥ ${FW.coolOn} °C)`, tone: 'warn' }
-    : t <= FW.heatOn ? { text: `Fresco (≤ ${FW.heatOn} °C)`, tone: 'info' }
-      : { text: `Templado (${FW.heatOn}–${FW.coolOn} °C)`, tone: 'ok' }
+export const tempBand = (t: number, b: ThermalBand = DEFAULT_BAND): Band =>
+  t >= b.coolOn ? { text: `Cálido (≥ ${b.coolOn} °C)`, tone: 'warn' }
+    : t <= b.heatOn ? { text: `Fresco (≤ ${b.heatOn} °C)`, tone: 'info' }
+      : { text: `Templado (${b.heatOn}–${b.coolOn} °C)`, tone: 'ok' }
 export const humBand = (h: number): Band =>
   h >= FW.humHigh ? { text: `Húmedo (≥ ${FW.humHigh} %)`, tone: 'warn' }
     : h <= FW.humLow ? { text: `Seco (≤ ${FW.humLow} %)`, tone: 'warn' }
@@ -162,7 +172,11 @@ export function NodeStatusCard({ node, className = '' }: { node: NodeState | nul
 }
 
 // ── History ───────────────────────────────────────────────────────────────────
-export interface Point { t: number; temperature: number | null; humidity: number | null; co: number | null; co2: number | null; state: string | null }
+export interface Point {
+  t: number; temperature: number | null; humidity: number | null; co: number | null; co2: number | null; state: string | null
+  // The node's band at that reading (null without node or with an old program).
+  setpoint?: number | null; coolOn?: number | null; heatOn?: number | null
+}
 
 export const AXIS = { stroke: '#475569', tick: { fontSize: 10, fill: '#94a3b8' } }
 export const tick = (ms: number) => new Date(ms).toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
@@ -175,6 +189,7 @@ function ChartTooltip({ active, payload, unit }: { active?: boolean; payload?: A
       <p className="tabular-nums text-slate-400">{tick(p.payload.t)}</p>
       <p className="text-slate-100">{fmt(p.value, unit === 'ADC' ? 0 : 1)} {unit}</p>
       {p.payload.state && <p className="text-slate-400">Estado: <span className="text-slate-200">{STATE_LABEL[p.payload.state] ?? p.payload.state}</span></p>}
+      {unit === '°C' && p.payload.setpoint != null && <p className="text-slate-400">Objetivo: <span className="text-slate-200">{fmt(p.payload.setpoint, 1)} °C</span></p>}
     </div>
   )
 }
@@ -190,12 +205,14 @@ export function niceAxis(values: number[], base: [number, number], step: number,
   return { domain: [lo, top != null && hi === base[1] ? top : hi], ticks }
 }
 
-export function LiveChart({ title, data, dataKey, unit, refs = [], axis }: {
+export function LiveChart({ title, data, dataKey, unit, refs = [], steps = [], axis }: {
   title: ReactNode
   data: Point[]
   dataKey: keyof Point
   unit: string
   refs?: { y: number; label?: string; color: string }[]
+  // Reference lines that may change over time (the node's setpoint and band), one value per point.
+  steps?: { key: keyof Point; color: string }[]
   axis: { domain: [number, number]; ticks: number[] }
 }) {
   // Four evenly spaced time ticks across the window.
@@ -215,6 +232,10 @@ export function LiveChart({ title, data, dataKey, unit, refs = [], axis }: {
                 label={r.label ? { value: r.label, fill: r.color, fontSize: 10, position: 'insideTopRight' } : undefined} />
             ))}
             <Line type="stepAfter" dataKey={dataKey} stroke="#38bdf8" strokeWidth={1.75} dot={false} isAnimationActive={false} connectNulls />
+            {steps.map(s => (
+              <Line key={s.key} type="stepAfter" dataKey={s.key} stroke={s.color} strokeWidth={1} strokeDasharray="4 4" strokeOpacity={0.7}
+                dot={false} activeDot={false} isAnimationActive={false} connectNulls />
+            ))}
           </LineChart>
         </ResponsiveContainer>
       </div>

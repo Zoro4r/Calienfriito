@@ -4,7 +4,7 @@ import api, { getApiErrorDetail } from '../api/client'
 import { useAuth } from '../context/AuthContext'
 import type { StoredReading } from '../types'
 import ControllerPanel from './ControllerPanel'
-import { FW, adcToPpm, isOccupied, occupiedPpmAt, ppmToAdc } from './NodeLive'
+import { FW, adcToPpm, isOccupied, nodeBand, occupiedPpmAt, ppmToAdc } from './NodeLive'
 import { NUM_INPUT_MODS } from '../utils/formStyles'
 
 // "Configuración" of a room with a node: the node's occupancy threshold (adjustable from here,
@@ -19,16 +19,9 @@ const POLL_MS = 3_000
 const CAN_SET_THRESHOLD = false
 interface SensorLatest { sensor_id: string; reading: StoredReading | null }
 
-/** The node's MQ-135 occupancy threshold: what it uses now, what it reads, and a field to change it. */
-function OccupancyThreshold({ roomId, sensorId }: { roomId: string; sensorId?: string }) {
-  const { user } = useAuth()
-  const canEdit = CAN_SET_THRESHOLD && user?.role === 'admin'
+/** Latest reading of the room's node, polled: shared by both cards. */
+function useLatestReading(sensorId?: string) {
   const [reading, setReading] = useState<StoredReading | null>(null)
-  const [value, setValue] = useState('')
-  const [sent, setSent] = useState<number | null>(null)
-  const [busy, setBusy] = useState(false)
-  const [err, setErr] = useState<string | null>(null)
-
   useEffect(() => {
     if (!sensorId) return
     let cancelled = false
@@ -39,6 +32,17 @@ function OccupancyThreshold({ roomId, sensorId }: { roomId: string; sensorId?: s
     const t = setInterval(load, POLL_MS)
     return () => { cancelled = true; clearInterval(t) }
   }, [sensorId])
+  return reading
+}
+
+/** The node's MQ-135 occupancy threshold: what it uses now, what it reads, and a field to change it. */
+function OccupancyThreshold({ roomId, reading }: { roomId: string; reading: StoredReading | null }) {
+  const { user } = useAuth()
+  const canEdit = CAN_SET_THRESHOLD && user?.role === 'admin'
+  const [value, setValue] = useState('')
+  const [sent, setSent] = useState<number | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
 
   const ns = reading?.node_state
   const reported = ns?.umbral_ocupacion != null   // false: firmware too old to report or accept it
@@ -97,10 +101,11 @@ function OccupancyThreshold({ roomId, sensorId }: { roomId: string; sensorId?: s
 }
 
 export default function NodeRules({ roomId, sensorId }: { roomId: string; sensorId?: string }) {
+  const reading = useLatestReading(sensorId)
   return (
     <div className="flex flex-col gap-4">
-      <ControllerPanel roomId={roomId} />
-      <OccupancyThreshold roomId={roomId} sensorId={sensorId} />
+      <ControllerPanel roomId={roomId} band={nodeBand(reading?.node_state)} />
+      <OccupancyThreshold roomId={roomId} reading={reading} />
     </div>
   )
 }

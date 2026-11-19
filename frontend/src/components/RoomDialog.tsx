@@ -147,7 +147,7 @@ export function RoomFields({ form, onSubmit }: { form: FormState; onSubmit: () =
     </form>
     <p className="mt-2 text-xs text-slate-500">
       {thresholdHint(f.occupancy_ppm)}
-      {' '}La IA decide con la temperatura objetivo. El nodo trabaja con 24 °C; usa el mismo valor para que la comparación Nodo vs IA sea justa.
+      {' '}El nodo y la IA usan la temperatura objetivo; el nodo la aplica al guardar y mueve su banda con ella.
       {' '}El enchufe inteligente solo admite apagado o encendido. Los 40 W del AIR MONSTER proceden de su etiqueta; la velocidad baja requiere medición para conocer su consumo.
     </p>
   </>

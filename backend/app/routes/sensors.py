@@ -1136,14 +1136,16 @@ async def set_node_settings(room_id: str, payload: NodeSettingsIn, db_sql: Sessi
     from app.services.mqtt_ingest import publish_settings
     if not MQTT_ENABLED:
         raise HTTPException(status_code=503, detail="MQTT is disabled on this server.")
+    from app.models.admin import Room
+    from app.services.mqtt_ingest import room_settings
+    room = db_sql.query(Room).filter(Room.id == room_id).first()
     try:
-        await publish_settings(room_id, {"umbral_ocupacion": payload.umbral_ocupacion})
+        # Whole message: it is retained, so leaving the temperature out would reset the node's setpoint.
+        await publish_settings(room_id, room_settings(payload.umbral_ocupacion, room.target_temp if room else None))
     except Exception as exc:  # broker down or unreachable
         logger.error("Could not publish settings for %s: %s", room_id, exc)
         raise HTTPException(status_code=503, detail="MQTT broker unavailable.") from exc
     # Stored too, so the room's value survives restarts (they re-publish it).
-    from app.models.admin import Room
-    room = db_sql.query(Room).filter(Room.id == room_id).first()
     if room:
         room.occupancy_threshold = payload.umbral_ocupacion
         db_sql.commit()

@@ -3,7 +3,7 @@ import { ChevronRight, RefreshCw } from 'lucide-react'
 import api, { getApiErrorDetail } from '../api/client'
 import { useAuth } from '../context/AuthContext'
 import { clockTime, parseUtc } from './ui'
-import { FW } from './NodeLive'
+import { FW, DEFAULT_BAND, type ThermalBand } from './NodeLive'
 
 // "Quién controla el aula": pick the node's rules or the learning controller, as two options
 // of one setting. How each did this month lives in the Aprendizaje tab, not here.
@@ -27,14 +27,15 @@ const ACK_TEXT: Record<Exclude<Ack, null>, string> = {
 
 const num = (n: number, dec = 1) => n.toLocaleString('es', { minimumFractionDigits: dec, maximumFractionDigits: dec })
 
-// Firmware rules (mirrored in FW), in priority order.
-const RULES: [string, string][] = [
+// Firmware rules in priority order, with the temperatures of the band the node reports
+// (they follow the room's target temperature).
+const rules = (b: ThermalBand): [string, string][] => [
   [`CO desde ${FW.coAlarm} ppm`, 'Alarma y ventilador al 100 %'],
   ['Aula vacía', 'Todo apagado'],
-  [`Bajo ${num(FW.coolOn)} °C`, 'En espera'],
-  [`${num(FW.coolOn)} – ${num(FW.fan75At)} °C`, 'Ventilador al 50 %'],
-  [`${num(FW.fan75At)} – ${num(FW.fan100At)} °C`, 'Ventilador al 75 %'],
-  [`Desde ${num(FW.fan100At)} °C`, 'Ventilador al 100 %'],
+  [`Bajo ${num(b.coolOn)} °C`, 'En espera'],
+  [`${num(b.coolOn)} – ${num(b.fan75At)} °C`, 'Ventilador al 50 %'],
+  [`${num(b.fan75At)} – ${num(b.fan100At)} °C`, 'Ventilador al 75 %'],
+  [`Desde ${num(b.fan100At)} °C`, 'Ventilador al 100 %'],
 ]
 
 function Option({ title, desc, selected, status, statusDot, disabled, onSelect }: {
@@ -52,7 +53,7 @@ function Option({ title, desc, selected, status, statusDot, disabled, onSelect }
   )
 }
 
-export default function ControllerPanel({ roomId }: { roomId: string }) {
+export default function ControllerPanel({ roomId, band = DEFAULT_BAND }: { roomId: string; band?: ThermalBand }) {
   const { user } = useAuth()
   const isAdmin = user?.role === 'admin'
   const [ctl, setCtl] = useState<Controller | null>(null)
@@ -137,9 +138,9 @@ export default function ControllerPanel({ roomId }: { roomId: string }) {
           <ChevronRight size={14} className="transition-transform group-open:rotate-90" />Ver las reglas del nodo
         </summary>
         <dl className="grid grid-cols-[minmax(0,12rem)_minmax(0,1fr)] gap-x-4 gap-y-1.5 px-5 pb-4 pl-10 text-sm">
-          {RULES.map(([when, then]) => <div key={when} className="contents"><dt className="tabular-nums text-slate-400">{when}</dt><dd className="m-0 text-slate-200">{then}</dd></div>)}
+          {rules(band).map(([when, then]) => <div key={when} className="contents"><dt className="tabular-nums text-slate-400">{when}</dt><dd className="m-0 text-slate-200">{then}</dd></div>)}
         </dl>
-        <p className="px-5 pb-4 pl-10 text-xs text-slate-500">En ese orden: el CO y el aula vacía mandan sobre la temperatura. Objetivo {num(FW.setpoint, 0)} °C.</p>
+        <p className="px-5 pb-4 pl-10 text-xs text-slate-500">En ese orden: el CO y el aula vacía mandan sobre la temperatura. Objetivo {num(band.setpoint)} °C.</p>
       </details>
     </section>
   )

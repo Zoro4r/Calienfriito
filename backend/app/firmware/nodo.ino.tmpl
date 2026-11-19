@@ -121,19 +121,25 @@ bool inaDisponible = false;
 // Una placa sin tacometro o sin calefactor pone su pin en -1: el programa no lo toca.
 
 // ------------------- Parametros de control (del informe) --------------------
-const float SETPOINT_C                = 24.0;    // temperatura objetivo
+const float SETPOINT_FABRICA_C        = 24.0;    // sin temperatura objetivo del aula
 const float HYSTERESIS_C              = 0.5;     // banda muerta +-0.5 C
 // Umbrales derivados: ventilador ON con T >= 24.5 C, calefactor ON con
 // T <= 23.5 C; ambos se apagan al volver al setpoint (24.0 C). Asi, al
 // terminar de enfriar no se activa el calefactor, ni al reves.
-const float T_VENTILADOR_ON_C         = SETPOINT_C + HYSTERESIS_C; // 24.5 C
-const float T_CALEFACTOR_ON_C         = SETPOINT_C - HYSTERESIS_C; // 23.5 C
-const float T_APAGADO_C               = SETPOINT_C;                // 24.0 C
 // Caudal proporcional al enfriar (tres niveles, en vez de ON/OFF binario):
 //   50 % de 24.5 a 25.0 C, 75 % de 25.0 a 25.5 C, 100 % desde 25.5 C o con CO2 alto.
 // Baja de nivel solo 0.2 C por debajo del umbral, para no oscilar entre niveles.
-const float T_NIVEL_75_C              = 25.0;
-const float T_NIVEL_100_C             = 25.5;
+const float NIVEL_75_SOBRE_C          = 1.0;     // el ventilador sube a 75 % esto por encima del setpoint
+const float NIVEL_100_SOBRE_C         = 1.5;     // y a 100 % esto por encima
+// Temperatura objetivo: la del aula (dashboard, ccs/<aula>/settings) o la de fabrica.
+// Los umbrales se derivan de ella con la histeresis de este montaje.
+float SETPOINT_C        = SETPOINT_FABRICA_C;
+float T_VENTILADOR_ON_C = SETPOINT_C + HYSTERESIS_C;
+float T_CALEFACTOR_ON_C = SETPOINT_C - HYSTERESIS_C;
+float T_APAGADO_C       = SETPOINT_C;
+float T_NIVEL_75_C      = SETPOINT_C + NIVEL_75_SOBRE_C;
+float T_NIVEL_100_C     = SETPOINT_C + NIVEL_100_SOBRE_C;
+const char* setpointOrigen = "fabrica";
 const float CO2_NIVEL_100_PPM         = 1500.0;
 const float BANDA_NIVEL_C             = 0.2;
 const unsigned long MIN_ON_MS         = 60000UL; // intervalo minimo on/off
@@ -663,6 +669,18 @@ void aplicarSimulacion(const String& msg) {
   simHastaMs = millis() + SIM_TIMEOUT_MS;
 }
 
+// Setpoint efectivo: el del aula (16-30 C) o el de fabrica; la banda se mueve con el.
+void aplicarSetpoint(float objetivo) {
+  bool delAula = objetivo >= 16.0 && objetivo <= 30.0;
+  SETPOINT_C = delAula ? objetivo : SETPOINT_FABRICA_C;
+  setpointOrigen = delAula ? "aula" : "fabrica";
+  T_VENTILADOR_ON_C = SETPOINT_C + HYSTERESIS_C;
+  T_CALEFACTOR_ON_C = SETPOINT_C - HYSTERESIS_C;
+  T_APAGADO_C       = SETPOINT_C;
+  T_NIVEL_75_C      = SETPOINT_C + NIVEL_75_SOBRE_C;
+  T_NIVEL_100_C     = SETPOINT_C + NIVEL_100_SOBRE_C;
+}
+
 // Umbral efectivo: el del aula, si no la calibracion, si no el predeterminado.
 void recalcularUmbral() {
   if (umbralAula > 0)                   { OCCUPANCY_ADC_THRESHOLD = umbralAula;              umbralOrigen = "aula"; }
@@ -676,11 +694,13 @@ void onMqttMessage(char* topic, byte* payload, unsigned int length) {
   for (unsigned int i = 0; i < length; i++) msg += (char)payload[i];
   if (strcmp(topic, TOPIC_SIM) == 0) { aplicarSimulacion(msg); return; }
   if (strcmp(topic, TOPIC_SETTINGS) == 0) {
-    // {"umbral_ocupacion": N} fija el umbral del aula; null o vacio vuelve a la calibracion.
+    // {"umbral_ocupacion": N, "temperatura_objetivo": T}: null o vacio vuelve a la calibracion / fabrica.
     long v = valorJson(msg, "umbral_ocupacion").toInt();   // "null" -> 0
     umbralAula = (v >= 1 && v <= 4095) ? (int)v : 0;
     recalcularUmbral();
+    aplicarSetpoint(valorJson(msg, "temperatura_objetivo").toFloat());   // "null" -> 0 -> fabrica
     LOG("EVT", "Umbral de ocupacion: entra >= %d, sale < %d (%s)", OCCUPANCY_ADC_THRESHOLD, OCCUPANCY_ADC_OFF, umbralOrigen);
+    LOG("EVT", "Setpoint: %.1f C (%s): enfria >= %.1f C, calienta <= %.1f C", SETPOINT_C, setpointOrigen, T_VENTILADOR_ON_C, T_CALEFACTOR_ON_C);
     publicarConfig();
     return;
   }
@@ -839,14 +859,15 @@ void publicarTelemetria(bool dhtOk, float tempC, float humedad, int mq135, int m
     "\"co_ppm\":%d,\"accion\":\"%s\",\"alarma_co\":%s,\"ventilador_pwm\":%d,\"ventilador_rpm\":%d,"
     "\"calefactor\":%s,\"buzzer\":%s,\"led\":\"%s\",\"motivo\":\"%s\","
     "\"bloqueo_s\":%lu,\"pendiente\":\"%s\",\"manual\":%s,\"manual_restante_s\":%lu,\"is_simulated\":%s%s,"
-    "\"umbral_ocupacion\":%d,\"umbral_origen\":\"%s\",\"simulacion\":%s,\"fallo_dht\":%s}",
+    "\"umbral_ocupacion\":%d,\"umbral_origen\":\"%s\",\"setpoint_c\":%.1f,\"t_enfriar_c\":%.1f,\"t_calentar_c\":%.1f,\"t_nivel_75_c\":%.1f,\"t_nivel_100_c\":%.1f,\"setpoint_origen\":\"%s\",\"simulacion\":%s,\"fallo_dht\":%s}",
     numeroCiclo, millis() / 1000.0, temp, hum, mq135, co2ppm, mq7ppm, nombreAccion(accionActual),
     alarmaCO ? "true" : "false", dutyVentilador, rpmVentilador,
     calefactorEncendido ? "true" : "false", buzzerEncendido ? "true" : "false",
     colorLed, motivo, bloqueoSegundos, bloqueoSegundos ? nombreAccion(accionPendiente) : "",
     manualActivo ? "true" : "false", manualActivo ? (manualHastaMs - millis() + 999) / 1000 : 0UL,
     TELEMETRIA_SIMULADA || simActiva ? "true" : "false", inaJson,
-    OCCUPANCY_ADC_THRESHOLD, umbralOrigen, simActiva ? "true" : "false", fallosDHT >= DHT_FALLOS_SEGURO ? "true" : "false");
+    OCCUPANCY_ADC_THRESHOLD, umbralOrigen, SETPOINT_C, T_VENTILADOR_ON_C, T_CALEFACTOR_ON_C,
+    T_NIVEL_75_C, T_NIVEL_100_C, setpointOrigen, simActiva ? "true" : "false", fallosDHT >= DHT_FALLOS_SEGURO ? "true" : "false");
   if (n < 0 || n >= (int)sizeof(buf)) {
     LOG("RED", "Telemetria demasiado larga; no se publica truncada");
     return;

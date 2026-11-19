@@ -36,6 +36,8 @@ RETRY_SECONDS = 5
 NODE_STATE_FIELDS = (
     "accion", "motivo", "alarma_co", "ventilador_pwm", "ventilador_rpm", "calefactor", "buzzer", "led",
     "bloqueo_s", "pendiente", "ciclo", "uptime_s", "co2_proxy", "manual", "manual_restante_s", "umbral_ocupacion", "umbral_origen",
+    # Thermal band in force on the node (it follows the room's target temperature).
+    "setpoint_c", "t_enfriar_c", "t_calentar_c", "t_nivel_75_c", "t_nivel_100_c", "setpoint_origen",
     "ventilador_conectado", "calefactor_conectado", "buzzer_conectado",
     "ventilador_pwm_objetivo", "calefactor_objetivo", "buzzer_objetivo",
     # Remote-order authority and acknowledgement (newer firmware), and the node's own
@@ -173,20 +175,26 @@ async def publish_settings(room_id: str, payload: dict) -> None:
         await client.publish(f"ccs/{room_id}/settings", json.dumps(payload), qos=1, retain=True)
 
 
-async def publish_room_threshold(room_id: str, adc: int | None) -> None:
-    """The room's occupancy threshold for its node, retained on ccs/<room>/settings.
-    None (JSON null) tells the node to fall back to its calibration. Never raises."""
+def room_settings(adc: int | None, target_c: float | None) -> dict:
+    """What a room sets on its node. None (JSON null) hands that value back to the node:
+    its calibration for the threshold, its factory setpoint for the temperature."""
+    return {"umbral_ocupacion": adc, "temperatura_objetivo": target_c}
+
+
+async def publish_room_settings(room_id: str, adc: int | None, target_c: float | None) -> None:
+    """The room's settings for its node, retained on ccs/<room>/settings, so they reach it
+    within seconds or when it reconnects. Never raises."""
     from app.config import MQTT_ENABLED
     if not MQTT_ENABLED:
         return
     try:
-        await publish_settings(room_id, {"umbral_ocupacion": adc})
+        await publish_settings(room_id, room_settings(adc, target_c))
     except Exception as exc:  # broker down: the next save or restart publishes it again
-        logger.warning("Could not publish occupancy threshold for %s: %s", room_id, exc)
+        logger.warning("Could not publish node settings for %s: %s", room_id, exc)
 
 
-async def sync_room_thresholds() -> None:
-    """Publish every room's threshold once, at startup."""
+async def sync_room_settings() -> None:
+    """Publish every room's settings once, at startup."""
     from app.config import MQTT_ENABLED
     if not MQTT_ENABLED:
         return
@@ -195,14 +203,14 @@ async def sync_room_thresholds() -> None:
     try:
         db = SessionLocal()
         try:
-            rooms = [(r.id, r.occupancy_threshold) for r in db.query(Room).all()]
+            rooms = [(r.id, r.occupancy_threshold, r.target_temp) for r in db.query(Room).all()]
         finally:
             db.close()
     except Exception as exc:
-        logger.warning("Could not read room thresholds: %s", exc)
+        logger.warning("Could not read room settings: %s", exc)
         return
-    for room_id, adc in rooms:
-        await publish_room_threshold(room_id, adc)
+    for room_id, adc, target_c in rooms:
+        await publish_room_settings(room_id, adc, target_c)
 
 
 def telemetry_to_reading(topic: str, payload: bytes | str, camera_occupancy: int | None = None) -> SensorReading | None:

@@ -71,6 +71,13 @@ export interface NodeState {
   co2_proxy?: number
   umbral_ocupacion?: number   // MQ-135 ADC from which the node counts the room as occupied (set from the dashboard)
   umbral_origen?: 'aula' | 'calibracion' | 'predeterminado'   // where that threshold comes from
+  // Thermal band in force on the node: it follows the room's target temperature (°C).
+  setpoint_c?: number
+  t_enfriar_c?: number
+  t_calentar_c?: number
+  t_nivel_75_c?: number
+  t_nivel_100_c?: number
+  setpoint_origen?: 'aula' | 'fabrica'
   ocupado?: boolean           // occupancy as the node decided it (newer firmware, with hysteresis)
   fallo_dht?: boolean         // the DHT missed 3 reads in a row: safe state
 }

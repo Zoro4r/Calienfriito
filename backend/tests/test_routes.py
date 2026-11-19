@@ -201,10 +201,13 @@ def test_admin_publishes_node_settings(as_role, monkeypatch):
     monkeypatch.setattr("app.config.MQTT_ENABLED", True)
     monkeypatch.setattr("app.services.mqtt_ingest.publish_settings", fake_publish)
     as_role("admin")
-    _rooms_db()
+    room = types.SimpleNamespace(occupancy_threshold=None, target_temp=23.5)
+    _rooms_db(room)
     res = client.put("/api/v1/sensors/rooms/B101/node-settings", json={"umbral_ocupacion": 260})
     assert res.status_code == 200
-    assert sent == [("B101", {"umbral_ocupacion": 260})]
+    # The whole retained message: the room's target temperature travels with the threshold.
+    assert sent == [("B101", {"umbral_ocupacion": 260, "temperatura_objetivo": 23.5})]
+    assert room.occupancy_threshold == 260
 
 
 def test_collaborator_cannot_add_classes(as_role):
@@ -307,9 +310,10 @@ def test_downsample_keeps_first_and_last():
     assert downsample(pts[:5], 10) == pts[:5]
 
 
-@pytest.mark.parametrize("adc", [300, None])
-def test_room_threshold_is_published_retained_or_cleared(monkeypatch, adc):
-    """The room's threshold goes to its node; None (JSON null) hands it back to the calibration."""
+@pytest.mark.parametrize("adc, target", [(300, 23.0), (None, 24.0)])
+def test_room_settings_are_published_retained(monkeypatch, adc, target):
+    """The room's threshold and target temperature go to its node in one retained message;
+    a None threshold (JSON null) hands it back to the node's calibration."""
     import asyncio
     from app.services import mqtt_ingest
     sent = []
@@ -318,5 +322,5 @@ def test_room_threshold_is_published_retained_or_cleared(monkeypatch, adc):
         sent.append((room_id, payload))
     monkeypatch.setattr("app.config.MQTT_ENABLED", True)
     monkeypatch.setattr(mqtt_ingest, "publish_settings", fake_publish)
-    asyncio.run(mqtt_ingest.publish_room_threshold("B101", adc))
-    assert sent == [("B101", {"umbral_ocupacion": adc})]
+    asyncio.run(mqtt_ingest.publish_room_settings("B101", adc, target))
+    assert sent == [("B101", {"umbral_ocupacion": adc, "temperatura_objetivo": target})]

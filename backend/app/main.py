@@ -48,10 +48,10 @@ async def startup_ml():
 
 @app.on_event("startup")
 async def startup_mqtt():
-    from app.services.mqtt_ingest import start_mqtt_ingest, sync_room_thresholds
+    from app.services.mqtt_ingest import start_mqtt_ingest, sync_room_settings
     start_mqtt_ingest()
-    # Re-publish every room's threshold (retained), so the broker holds what the database says.
-    asyncio.create_task(sync_room_thresholds())
+    # Re-publish every room's node settings (retained), so the broker holds what the database says.
+    asyncio.create_task(sync_room_settings())
 
 
 @app.on_event("shutdown")
