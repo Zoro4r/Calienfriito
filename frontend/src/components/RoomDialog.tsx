@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { AlertTriangle, RefreshCw } from 'lucide-react'
 import api, { getApiErrorDetail } from '../api/client'
 import { NUM_INPUT_MODS } from '../utils/formStyles'
-import { FW, adcToPpm } from './NodeLive'
+import { FW, adcToPpm, ppmToAdc } from './NodeLive'
 import type { Room } from '../utils/rooms'
 import { Dialog } from './ui'
 
@@ -11,8 +11,8 @@ import { Dialog } from './ui'
 // A new room only asks for its name, which is also its code (the AULA of the ESP32); capacity
 // and target temperature start with defaults, and building and floor can be set later when editing.
 
-interface RoomForm { id: string; name: string; building: string; floor: string; max_capacity: string; target_temp: string; volume_m3: string; occupancy_threshold: string; fan_type: 'pwm_12v' | 'smart_plug'; fan_power_w: string }
-const EMPTY_ROOM: RoomForm = { id: '', name: '', building: '', floor: '', max_capacity: '30', target_temp: '24', volume_m3: '', occupancy_threshold: '', fan_type: 'pwm_12v', fan_power_w: '2.4' }
+interface RoomForm { id: string; name: string; building: string; floor: string; max_capacity: string; target_temp: string; volume_m3: string; occupancy_ppm: string; fan_type: 'pwm_12v' | 'smart_plug'; fan_power_w: string }
+const EMPTY_ROOM: RoomForm = { id: '', name: '', building: '', floor: '', max_capacity: '30', target_temp: '24', volume_m3: '', occupancy_ppm: '', fan_type: 'pwm_12v', fan_power_w: '2.4' }
 type Impact = { reservations_count: number; sensors_count: number }
 
 export function friendly(err: unknown, fallback: string) {
@@ -28,7 +28,8 @@ export function useRoomForm(original: Room | null) {
     id: original.id, name: original.name, building: original.building ?? '', floor: original.floor == null ? '' : String(original.floor),
     max_capacity: String(original.max_capacity), target_temp: String(original.target_temp),
     volume_m3: original.volume_m3 == null ? '' : String(original.volume_m3),
-    occupancy_threshold: original.occupancy_threshold == null ? '' : String(original.occupancy_threshold),
+    // Stored as the MQ-135 ADC reading the node compares (0-4095); edited in ppm, like the rest of the dashboard.
+    occupancy_ppm: original.occupancy_threshold == null ? '' : String(adcToPpm(original.occupancy_threshold)),
     fan_type: original.fan_type ?? 'pwm_12v', fan_power_w: original.fan_power_w == null ? '' : String(original.fan_power_w),
   } : EMPTY_ROOM)
   // Rename: how many records move with the room. New room: history left by a deleted room with this code.
@@ -68,8 +69,8 @@ export function useRoomForm(original: Room | null) {
   if (!(Number(f.max_capacity) > 0)) problems.push('La capacidad debe ser mayor que 0.')
   const t = Number(f.target_temp)
   if (f.volume_m3 !== '' && !(Number(f.volume_m3) > 0 && Number(f.volume_m3) <= 100000)) problems.push('El volumen debe ser mayor que 0 y hasta 100 000 m³.')
-  const th = Number(f.occupancy_threshold)
-  if (f.occupancy_threshold !== '' && !(Number.isInteger(th) && th >= 1 && th <= 4095)) problems.push('El umbral de ocupación debe ser un entero entre 1 y 4095.')
+  const thPpm = Number(f.occupancy_ppm)
+  if (f.occupancy_ppm !== '' && !(Number.isInteger(thPpm) && thPpm > 400 && thPpm <= 2000)) problems.push('El umbral de ocupación debe ser un entero entre 401 y 2000 ppm.')
   if (f.fan_power_w !== '' && !(Number(f.fan_power_w) > 0 && Number(f.fan_power_w) <= 10000)) problems.push('La potencia del ventilador debe ser mayor que 0 y hasta 10 000 W.')
   if (f.fan_power_w === '') problems.push('Indica la potencia nominal del ventilador.')
   if (!(t >= 16 && t <= 30)) problems.push('La temperatura objetivo debe estar entre 16 y 30 °C.')
@@ -83,7 +84,10 @@ export function useRoomForm(original: Room | null) {
     floor: f.floor === '' ? null : Number(f.floor),
     volume_m3: f.volume_m3 === '' ? null : Number(f.volume_m3),
     // Empty: the server uses the default threshold (FW.nodeOccupiedAdc).
-    occupancy_threshold: f.occupancy_threshold === '' ? null : Number(f.occupancy_threshold),
+    // 1 ppm ≈ 2.6 ADC: an untouched value keeps its exact ADC instead of drifting on every save.
+    occupancy_threshold: f.occupancy_ppm === '' ? null
+      : original?.occupancy_threshold != null && Number(f.occupancy_ppm) === adcToPpm(original.occupancy_threshold)
+        ? original.occupancy_threshold : ppmToAdc(Number(f.occupancy_ppm)),
     fan_type: f.fan_type,
     fan_power_w: Number(f.fan_power_w),
   }
@@ -93,11 +97,9 @@ export function useRoomForm(original: Room | null) {
 
 type FormState = ReturnType<typeof useRoomForm>
 
-/** What the occupancy threshold means, with its CO₂ equivalent, under the form. */
+/** What the occupancy threshold means, under the form. */
 function thresholdHint(value: string) {
-  const n = Number(value)
-  const adc = value !== '' && Number.isInteger(n) && n >= 1 && n <= 4095 ? n : FW.nodeOccupiedAdc
-  return `Umbral de ocupación: lectura del MQ-135 (0–4095) desde la que el nodo cuenta el aula como ocupada; ${adc} ≈ ${adcToPpm(adc)} ppm de CO₂.${value === '' ? ` Vacío usa ${FW.nodeOccupiedAdc}.` : ''} Se aplica al descargar de nuevo el programa del nodo.`
+  return `Umbral de ocupación: nivel de CO₂ (MQ-135) desde el que el nodo cuenta el aula como ocupada.${value === '' ? ` Vacío usa ${adcToPpm(FW.nodeOccupiedAdc)} ppm.` : ''} Se aplica al descargar de nuevo el programa del nodo.`
 }
 
 export function RoomFields({ form, onSubmit }: { form: FormState; onSubmit: () => void }) {
@@ -114,9 +116,9 @@ export function RoomFields({ form, onSubmit }: { form: FormState; onSubmit: () =
       <span className="mt-1 block text-xs text-slate-500">Es también el código del aula: el que pondrás como AULA en el ESP32.</span>
       <div className="mt-3 grid grid-cols-2 gap-3">
         {field('volume_m3', 'Volumen (m³)', { type: 'number', min: 0.01, max: 100000, step: 'any', placeholder: 'ej. 180' })}
-        {field('occupancy_threshold', 'Umbral de ocupación', { type: 'number', min: 1, max: 4095, step: 1, placeholder: String(FW.nodeOccupiedAdc) })}
+        {field('occupancy_ppm', 'Umbral de ocupación (ppm)', { type: 'number', min: 401, max: 2000, step: 1, placeholder: String(adcToPpm(FW.nodeOccupiedAdc)) })}
       </div>
-      <p className="mt-1 text-xs text-slate-500">Volumen: superficie × altura del techo; lo usa el modelo de IA y puede quedar vacío. {thresholdHint(f.occupancy_threshold)}</p>
+      <p className="mt-1 text-xs text-slate-500">Volumen: superficie × altura del techo; lo usa el modelo de IA y puede quedar vacío. {thresholdHint(f.occupancy_ppm)}</p>
       <button type="submit" className="hidden" />
     </form>
   )
@@ -128,7 +130,7 @@ export function RoomFields({ form, onSubmit }: { form: FormState; onSubmit: () =
       {field('floor', 'Piso', { type: 'number', placeholder: 'ej. 6', min: -5, max: 99 })}
       {field('max_capacity', 'Capacidad (personas)', { type: 'number', min: 1 })}
       {field('volume_m3', 'Volumen (m³)', { type: 'number', min: 0.01, max: 100000, step: 'any', placeholder: 'superficie × altura' })}
-      {field('occupancy_threshold', 'Umbral de ocupación', { type: 'number', min: 1, max: 4095, step: 1, placeholder: String(FW.nodeOccupiedAdc) })}
+      {field('occupancy_ppm', 'Umbral de ocupación (ppm)', { type: 'number', min: 401, max: 2000, step: 1, placeholder: String(adcToPpm(FW.nodeOccupiedAdc)) })}
       {field('target_temp', 'Temperatura objetivo (°C)', { type: 'number', min: 16, max: 30, step: 0.5 })}
       <label className="block">
         <span className="field-label">Tipo de ventilador</span>
@@ -144,7 +146,7 @@ export function RoomFields({ form, onSubmit }: { form: FormState; onSubmit: () =
       <button type="submit" className="hidden" />
     </form>
     <p className="mt-2 text-xs text-slate-500">
-      {thresholdHint(f.occupancy_threshold)}
+      {thresholdHint(f.occupancy_ppm)}
       {' '}La IA decide con la temperatura objetivo. El nodo trabaja con 24 °C; usa el mismo valor para que la comparación Nodo vs IA sea justa.
       {' '}El enchufe inteligente solo admite apagado o encendido. Los 40 W del AIR MONSTER proceden de su etiqueta; la velocidad baja requiere medición para conocer su consumo.
     </p>
