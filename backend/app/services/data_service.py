@@ -299,4 +299,6 @@ async def process_reading(db, reading: SensorReading, db_sql=None, origin: str |
     }
     if room_context:
         result["room_context"] = room_context
+    if room_id:
+        result["room_id"] = room_id   # also when the room's control is disabled
     return result

@@ -236,11 +236,13 @@ async def _ingest(topic: str, payload: bytes) -> None:
     db_sql = SessionLocal()
     try:
         result = await process_reading(get_db(), reading, db_sql=db_sql, origin=origin)
-        room = result.get("room_context") if isinstance(result, dict) else None
-        if room and reading.node_state:
+        # The plug follows the node's own decision, so it syncs even when the room's
+        # server-side control is disabled (no room_context then, only room_id).
+        room_id = result.get("room_id") if isinstance(result, dict) else None
+        if room_id and reading.node_state:
             from app.services.smart_plug import sync_from_telemetry
 
-            await sync_from_telemetry(db_sql, room["room_id"], reading.node_state,
+            await sync_from_telemetry(db_sql, room_id, reading.node_state,
                                       is_simulated=reading.is_simulated)
     finally:
         db_sql.close()
