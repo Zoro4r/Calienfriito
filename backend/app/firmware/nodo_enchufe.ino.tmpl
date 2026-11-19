@@ -167,18 +167,19 @@ const int CO_ALARM_PPM                = 50;      // umbral de alarma de CO
 // ACTUALIZACION 2026-11-18: el MQ-135 estaba mal conectado durante ese historial, asi
 // que sus valores de ADC no representan el cuarto. Tras corregir la conexion, el umbral
 // de ENTRADA se calibro fisicamente en el cuarto: 140 (ADC filtrado). El de SALIDA
-// mantiene la proporcion anterior (mitad del de entrada) y queda pendiente de confirmar
+// sale OCUPACION_MARGEN_ADC por debajo del de entrada y queda pendiente de confirmar
 // con un registro nuevo del sensor bien conectado.
 // Umbral de ocupacion (ADC del MQ-135, 0-4095). Manda, en este orden:
 //   1) el que fija el aula en el dashboard (ccs/<aula>/settings, retenido; llega al conectar),
 //   2) la calibracion de este nodo (OCCUPANCY_ADC_CALIBRADO; 0 = sin calibrar),
 //   3) OCCUPANCY_ADC_PREDETERMINADO.
-// El de SALIDA es la mitad del de entrada (histeresis).
+// El de SALIDA queda OCUPACION_MARGEN_ADC por debajo (~20 ppm): margen contra el ruido del sensor.
+const int OCUPACION_MARGEN_ADC        = 51;       // ~20 ppm (1 ppm = 2.56 ADC)
 const int OCCUPANCY_ADC_CALIBRADO      = 0;        // AJUSTA con tu calibracion (0 = sin calibrar)
 const int OCCUPANCY_ADC_PREDETERMINADO = 160;     // sin valor del aula ni calibracion (~463 ppm)
 int umbralAula = 0;                               // del dashboard; 0 = el aula no fija uno
 int OCCUPANCY_ADC_THRESHOLD = OCCUPANCY_ADC_CALIBRADO > 0 ? OCCUPANCY_ADC_CALIBRADO : OCCUPANCY_ADC_PREDETERMINADO;
-int OCCUPANCY_ADC_OFF       = OCCUPANCY_ADC_THRESHOLD / 2;
+int OCCUPANCY_ADC_OFF       = max(1, OCCUPANCY_ADC_THRESHOLD - OCUPACION_MARGEN_ADC);
 const char* umbralOrigen    = OCCUPANCY_ADC_CALIBRADO > 0 ? "calibracion" : "predeterminado";
 
 const float MQ135_EMA_ALPHA           = 0.2;     // EMA a 1 Hz: constante de tiempo ~4.5 s (quita picos de 1 muestra)
@@ -648,7 +649,7 @@ void recalcularUmbral() {
   if (umbralAula > 0)                   { OCCUPANCY_ADC_THRESHOLD = umbralAula;              umbralOrigen = "aula"; }
   else if (OCCUPANCY_ADC_CALIBRADO > 0) { OCCUPANCY_ADC_THRESHOLD = OCCUPANCY_ADC_CALIBRADO; umbralOrigen = "calibracion"; }
   else                                  { OCCUPANCY_ADC_THRESHOLD = OCCUPANCY_ADC_PREDETERMINADO; umbralOrigen = "predeterminado"; }
-  OCCUPANCY_ADC_OFF = OCCUPANCY_ADC_THRESHOLD / 2;
+  OCCUPANCY_ADC_OFF = max(1, OCCUPANCY_ADC_THRESHOLD - OCUPACION_MARGEN_ADC);
 }
 
 void onMqttMessage(char* topic, byte* payload, unsigned int length) {
