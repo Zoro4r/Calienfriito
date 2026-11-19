@@ -1121,7 +1121,8 @@ class NodeSettingsIn(BaseModel):
 
 
 @router.put("/rooms/{room_id}/node-settings", responses={403: {"model": ErrorDetail}, 422: {"model": ErrorDetail}, 503: {"model": ErrorDetail}})
-async def set_node_settings(room_id: str, payload: NodeSettingsIn, current_user: User = Depends(get_current_user)):
+async def set_node_settings(room_id: str, payload: NodeSettingsIn, db_sql: Session = Depends(get_db_sql),
+                            current_user: User = Depends(get_current_user)):
     """Change a node's occupancy threshold without reflashing it (admins only).
 
     Published retained to ccs/<room>/settings; the node applies it, stores it in flash and reports
@@ -1140,6 +1141,12 @@ async def set_node_settings(room_id: str, payload: NodeSettingsIn, current_user:
     except Exception as exc:  # broker down or unreachable
         logger.error("Could not publish settings for %s: %s", room_id, exc)
         raise HTTPException(status_code=503, detail="MQTT broker unavailable.") from exc
+    # Stored too, so the room's value survives restarts (they re-publish it).
+    from app.models.admin import Room
+    room = db_sql.query(Room).filter(Room.id == room_id).first()
+    if room:
+        room.occupancy_threshold = payload.umbral_ocupacion
+        db_sql.commit()
     logger.info("Node settings for %s set by '%s': umbral_ocupacion=%d", room_id, current_user.username, payload.umbral_ocupacion)
     return {"room_id": room_id, "umbral_ocupacion": payload.umbral_ocupacion}
 

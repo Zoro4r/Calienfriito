@@ -116,6 +116,9 @@ def _rooms_db(room=None):
         def query(self, *_):
             return _Query()
 
+        def commit(self):
+            pass
+
     from app.database_sql import get_db_sql
     app.dependency_overrides[get_db_sql] = lambda: _Session()
 
@@ -135,17 +138,9 @@ def test_node_firmware_fills_room_and_broker_only(as_role, monkeypatch):
     assert "__AULA__" not in code and "__MQTT_HOST__" not in code
     assert "#define DHTTYPE      DHT11" in code
     assert "DHT22" not in code
-    # An unregistered room gets the default occupancy threshold.
-    assert "OCCUPANCY_ADC_THRESHOLD     = 140;" in code and "__OCCUPANCY_THRESHOLD__" not in code
-
-
-def test_node_firmware_carries_room_occupancy_threshold(as_role, monkeypatch):
-    from app.routes import admin as admin_routes
-    monkeypatch.setattr(admin_routes, "NODE_MQTT_HOST", "broker.example")
-    as_role("admin")
-    _rooms_db(types.SimpleNamespace(occupancy_threshold=310, fan_type="pwm_12v"))
-    code = client.get("/api/v1/admin/node-firmware", params={"room": "B101"}).text
-    assert "OCCUPANCY_ADC_THRESHOLD     = 310;" in code
+    # The occupancy threshold arrives over MQTT: the node subscribes to its settings topic and
+    # falls back to its calibration, then to 160.
+    assert "TOPIC_SETTINGS" in code and "OCCUPANCY_ADC_PREDETERMINADO = 160" in code
 
 
 @pytest.mark.parametrize("room_fan, query, plug", [
@@ -162,7 +157,7 @@ def test_node_firmware_variant_follows_fan(as_role, monkeypatch, room_fan, query
     params = {"room": "B101", **({"fan": query} if query else {})}
     code = client.get("/api/v1/admin/node-firmware", params=params).text
     assert ("#define FAN_PWM_PIN  -1" in code) == plug
-    assert '#define AULA "B101"' in code and "__AULA__" not in code and "__OCCUPANCY_THRESHOLD__" not in code
+    assert '#define AULA "B101"' in code and "__AULA__" not in code
 
 
 @pytest.mark.parametrize("room", ["B 101", "B#1", "ccs/+", "x" * 21])
@@ -206,6 +201,7 @@ def test_admin_publishes_node_settings(as_role, monkeypatch):
     monkeypatch.setattr("app.config.MQTT_ENABLED", True)
     monkeypatch.setattr("app.services.mqtt_ingest.publish_settings", fake_publish)
     as_role("admin")
+    _rooms_db()
     res = client.put("/api/v1/sensors/rooms/B101/node-settings", json={"umbral_ocupacion": 260})
     assert res.status_code == 200
     assert sent == [("B101", {"umbral_ocupacion": 260})]
@@ -309,3 +305,18 @@ def test_downsample_keeps_first_and_last():
     assert len(out) == 10
     assert out[0]["i"] == 0 and out[-1]["i"] == 99
     assert downsample(pts[:5], 10) == pts[:5]
+
+
+@pytest.mark.parametrize("adc", [300, None])
+def test_room_threshold_is_published_retained_or_cleared(monkeypatch, adc):
+    """The room's threshold goes to its node; None (JSON null) hands it back to the calibration."""
+    import asyncio
+    from app.services import mqtt_ingest
+    sent = []
+
+    async def fake_publish(room_id, payload):
+        sent.append((room_id, payload))
+    monkeypatch.setattr("app.config.MQTT_ENABLED", True)
+    monkeypatch.setattr(mqtt_ingest, "publish_settings", fake_publish)
+    asyncio.run(mqtt_ingest.publish_room_threshold("B101", adc))
+    assert sent == [("B101", {"umbral_ocupacion": adc})]

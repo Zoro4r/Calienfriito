@@ -35,7 +35,7 @@ RETRY_SECONDS = 5
 # Node decision fields copied verbatim into node_state.
 NODE_STATE_FIELDS = (
     "accion", "motivo", "alarma_co", "ventilador_pwm", "ventilador_rpm", "calefactor", "buzzer", "led",
-    "bloqueo_s", "pendiente", "ciclo", "uptime_s", "co2_proxy", "manual", "manual_restante_s", "umbral_ocupacion",
+    "bloqueo_s", "pendiente", "ciclo", "uptime_s", "co2_proxy", "manual", "manual_restante_s", "umbral_ocupacion", "umbral_origen",
     "ventilador_conectado", "calefactor_conectado", "buzzer_conectado",
     "ventilador_pwm_objetivo", "calefactor_objetivo", "buzzer_objetivo",
     # Remote-order authority and acknowledgement (newer firmware), and the node's own
@@ -171,6 +171,38 @@ async def publish_settings(room_id: str, payload: dict) -> None:
 
     async with aiomqtt.Client(MQTT_HOST, MQTT_PORT, identifier=f"ccs-set-{uuid.uuid4().hex[:8]}") as client:
         await client.publish(f"ccs/{room_id}/settings", json.dumps(payload), qos=1, retain=True)
+
+
+async def publish_room_threshold(room_id: str, adc: int | None) -> None:
+    """The room's occupancy threshold for its node, retained on ccs/<room>/settings.
+    None (JSON null) tells the node to fall back to its calibration. Never raises."""
+    from app.config import MQTT_ENABLED
+    if not MQTT_ENABLED:
+        return
+    try:
+        await publish_settings(room_id, {"umbral_ocupacion": adc})
+    except Exception as exc:  # broker down: the next save or restart publishes it again
+        logger.warning("Could not publish occupancy threshold for %s: %s", room_id, exc)
+
+
+async def sync_room_thresholds() -> None:
+    """Publish every room's threshold once, at startup."""
+    from app.config import MQTT_ENABLED
+    if not MQTT_ENABLED:
+        return
+    from app.database_sql import SessionLocal
+    from app.models.admin import Room
+    try:
+        db = SessionLocal()
+        try:
+            rooms = [(r.id, r.occupancy_threshold) for r in db.query(Room).all()]
+        finally:
+            db.close()
+    except Exception as exc:
+        logger.warning("Could not read room thresholds: %s", exc)
+        return
+    for room_id, adc in rooms:
+        await publish_room_threshold(room_id, adc)
 
 
 def telemetry_to_reading(topic: str, payload: bytes | str, camera_occupancy: int | None = None) -> SensorReading | None:

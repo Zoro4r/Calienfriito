@@ -16,7 +16,7 @@ export const FW = {
   humHigh: 60, humLow: 40,
   coAlarm: 50,
   occupiedAdc: 2200,      // Wokwi simulation
-  nodeOccupiedAdc: 140,   // physical node default (DEFAULT_OCCUPANCY_THRESHOLD in the backend), before it reports its own
+  nodeOccupiedAdc: 160,   // physical node default without room value or calibration (OCCUPANCY_ADC_PREDETERMINADO)
   minOnS: 60,
 }
 
@@ -68,8 +68,14 @@ export const occupiedPpmAt = (ns: { umbral_ocupacion?: number } | null | undefin
 // Occupied as the node decided it (with its own hysteresis) when it reports it; otherwise by threshold.
 export const isOccupied = (ns: { ocupado?: boolean } | null | undefined, ppm: number | null | undefined, thresholdPpm: number) =>
   ns?.ocupado ?? (ppm == null ? null : ppm >= thresholdPpm)
-export const occBand = (occupied: boolean, thresholdPpm: number): Band =>
-  occupied ? { text: `Aula ocupada (≥ ${thresholdPpm} ppm)`, tone: 'ok' } : { text: `Aula vacía (< ${thresholdPpm} ppm)`, tone: 'muted' }
+const ORIGIN_LABEL: Record<string, string> = { aula: 'del aula', calibracion: 'calibración', predeterminado: 'predeterminado' }
+// origin: where the node's threshold comes from. pendingPpm: the room's value while the node has not
+// applied it yet (offline, or a program that does not listen to ccs/<aula>/settings).
+export const occBand = (occupied: boolean, thresholdPpm: number, origin?: string | null, pendingPpm?: number | null): Band => {
+  const src = origin && ORIGIN_LABEL[origin] ? `, ${ORIGIN_LABEL[origin]}` : ''
+  const pending = pendingPpm != null ? ` · aplicando ${pendingPpm}` : ''
+  return occupied ? { text: `Aula ocupada (≥ ${thresholdPpm} ppm${src})${pending}`, tone: 'ok' } : { text: `Aula vacía (< ${thresholdPpm} ppm${src})${pending}`, tone: 'muted' }
+}
 
 // Dot colours for wrapped status text (same as StatusText).
 const TONE_DOT_CLASS: Record<Tone, string> = {

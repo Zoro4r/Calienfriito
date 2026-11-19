@@ -157,8 +157,18 @@ const int CO_ALARM_PPM                = 50;      // umbral de alarma de CO
 //     muestran 3 477 + 3 266 bloqueos "Histeresis: sigue en ...").
 //   - Simulado sobre el CSV, el esquema de abajo deja 0.08 cambios por hora y
 //     8 episodios de ocupacion (mediana 41 min).
-const int OCCUPANCY_ADC_THRESHOLD     = __OCCUPANCY_THRESHOLD__;     // ENTRA a ocupada: del dashboard (Infraestructura -> Editar aula); 140 si no se indica
-const int OCCUPANCY_ADC_OFF           = OCCUPANCY_ADC_THRESHOLD / 2; // SALE a vacia: mitad del umbral de entrada
+// Umbral de ocupacion (ADC del MQ-135, 0-4095). Manda, en este orden:
+//   1) el que fija el aula en el dashboard (ccs/<aula>/settings, retenido; llega al conectar),
+//   2) la calibracion de este nodo (OCCUPANCY_ADC_CALIBRADO; 0 = sin calibrar),
+//   3) OCCUPANCY_ADC_PREDETERMINADO.
+// El de SALIDA es la mitad del de entrada (histeresis).
+const int OCCUPANCY_ADC_CALIBRADO      = 0;        // AJUSTA con tu calibracion (0 = sin calibrar)
+const int OCCUPANCY_ADC_PREDETERMINADO = 160;     // sin valor del aula ni calibracion (~463 ppm)
+int umbralAula = 0;                               // del dashboard; 0 = el aula no fija uno
+int OCCUPANCY_ADC_THRESHOLD = OCCUPANCY_ADC_CALIBRADO > 0 ? OCCUPANCY_ADC_CALIBRADO : OCCUPANCY_ADC_PREDETERMINADO;
+int OCCUPANCY_ADC_OFF       = OCCUPANCY_ADC_THRESHOLD / 2;
+const char* umbralOrigen    = OCCUPANCY_ADC_CALIBRADO > 0 ? "calibracion" : "predeterminado";
+
 const float MQ135_EMA_ALPHA           = 0.2;     // EMA a 1 Hz: constante de tiempo ~4.5 s (quita picos de 1 muestra)
 const unsigned long OCUPACION_CONFIRMA_ON_MS  = 10000UL; // la condicion debe durar 10 s para ocupar
 const unsigned long OCUPACION_CONFIRMA_OFF_MS = 30000UL; // y 30 s para declarar el aula vacia
@@ -248,6 +258,7 @@ const char* TOPIC_TELEMETRY = "ccs/" AULA "/telemetry";
 const char* TOPIC_STATUS    = "ccs/" AULA "/status";
 const char* TOPIC_CMD       = "ccs/" AULA "/command";
 const char* TOPIC_CONFIG    = "ccs/" AULA "/config"; // umbrales, retenido (lo lee el monitor del nodo)
+const char* TOPIC_SETTINGS  = "ccs/" AULA "/settings"; // umbral del aula, retenido (lo publica el servidor)
 const char* TOPIC_SIM       = "ccs/" AULA "/sim";    // lecturas simuladas desde el dashboard (pagina Simulacion)
 const char* CLIENT_ID_BASE  = "ccs-" AULA "-nodo";
 const unsigned long WIFI_TIMEOUT_MS = 10000UL;
@@ -652,10 +663,27 @@ void aplicarSimulacion(const String& msg) {
   simHastaMs = millis() + SIM_TIMEOUT_MS;
 }
 
+// Umbral efectivo: el del aula, si no la calibracion, si no el predeterminado.
+void recalcularUmbral() {
+  if (umbralAula > 0)                   { OCCUPANCY_ADC_THRESHOLD = umbralAula;              umbralOrigen = "aula"; }
+  else if (OCCUPANCY_ADC_CALIBRADO > 0) { OCCUPANCY_ADC_THRESHOLD = OCCUPANCY_ADC_CALIBRADO; umbralOrigen = "calibracion"; }
+  else                                  { OCCUPANCY_ADC_THRESHOLD = OCCUPANCY_ADC_PREDETERMINADO; umbralOrigen = "predeterminado"; }
+  OCCUPANCY_ADC_OFF = OCCUPANCY_ADC_THRESHOLD / 2;
+}
+
 void onMqttMessage(char* topic, byte* payload, unsigned int length) {
   String msg;
   for (unsigned int i = 0; i < length; i++) msg += (char)payload[i];
   if (strcmp(topic, TOPIC_SIM) == 0) { aplicarSimulacion(msg); return; }
+  if (strcmp(topic, TOPIC_SETTINGS) == 0) {
+    // {"umbral_ocupacion": N} fija el umbral del aula; null o vacio vuelve a la calibracion.
+    long v = valorJson(msg, "umbral_ocupacion").toInt();   // "null" -> 0
+    umbralAula = (v >= 1 && v <= 4095) ? (int)v : 0;
+    recalcularUmbral();
+    LOG("EVT", "Umbral de ocupacion: entra >= %d, sale < %d (%s)", OCCUPANCY_ADC_THRESHOLD, OCCUPANCY_ADC_OFF, umbralOrigen);
+    publicarConfig();
+    return;
+  }
   LOG("RED", "Comando recibido en %s: %s", topic, msg.c_str());
 
   String modo = valorJson(msg, "modo");
@@ -746,6 +774,7 @@ void intentarMQTT() {
     mqttEsperaMs = mqttProximaEsperaMs = MQTT_RETRY_MIN_MS;
     mqtt.publish(TOPIC_STATUS, "online", true);
     mqtt.subscribe(TOPIC_CMD, 1);
+    mqtt.subscribe(TOPIC_SETTINGS, 1);
     mqtt.subscribe(TOPIC_SIM, 0);
     publicarConfig();
     LOG("RED", "MQTT conectado a %s:%d | cliente %s", MQTT_HOST, MQTT_PORT, clientId.c_str());
@@ -810,14 +839,14 @@ void publicarTelemetria(bool dhtOk, float tempC, float humedad, int mq135, int m
     "\"co_ppm\":%d,\"accion\":\"%s\",\"alarma_co\":%s,\"ventilador_pwm\":%d,\"ventilador_rpm\":%d,"
     "\"calefactor\":%s,\"buzzer\":%s,\"led\":\"%s\",\"motivo\":\"%s\","
     "\"bloqueo_s\":%lu,\"pendiente\":\"%s\",\"manual\":%s,\"manual_restante_s\":%lu,\"is_simulated\":%s%s,"
-    "\"umbral_ocupacion\":%d,\"simulacion\":%s,\"fallo_dht\":%s}",
+    "\"umbral_ocupacion\":%d,\"umbral_origen\":\"%s\",\"simulacion\":%s,\"fallo_dht\":%s}",
     numeroCiclo, millis() / 1000.0, temp, hum, mq135, co2ppm, mq7ppm, nombreAccion(accionActual),
     alarmaCO ? "true" : "false", dutyVentilador, rpmVentilador,
     calefactorEncendido ? "true" : "false", buzzerEncendido ? "true" : "false",
     colorLed, motivo, bloqueoSegundos, bloqueoSegundos ? nombreAccion(accionPendiente) : "",
     manualActivo ? "true" : "false", manualActivo ? (manualHastaMs - millis() + 999) / 1000 : 0UL,
     TELEMETRIA_SIMULADA || simActiva ? "true" : "false", inaJson,
-    OCCUPANCY_ADC_THRESHOLD, simActiva ? "true" : "false", fallosDHT >= DHT_FALLOS_SEGURO ? "true" : "false");
+    OCCUPANCY_ADC_THRESHOLD, umbralOrigen, simActiva ? "true" : "false", fallosDHT >= DHT_FALLOS_SEGURO ? "true" : "false");
   if (n < 0 || n >= (int)sizeof(buf)) {
     LOG("RED", "Telemetria demasiado larga; no se publica truncada");
     return;

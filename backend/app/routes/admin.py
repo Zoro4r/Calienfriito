@@ -5,7 +5,7 @@ from pathlib import Path
 from datetime import datetime, time as dt_time, timezone, timedelta
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from fastapi.responses import PlainTextResponse
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pydantic import BaseModel, Field, model_validator
@@ -17,11 +17,12 @@ from app.config import LOCAL_UTC_OFFSET_HOURS, NODE_MQTT_HOST, NODE_MQTT_PORT, N
 from app.core.timeutils import ensure_local, to_local
 from app.database import get_db
 from app.database_sql import get_db_sql
-from app.models.admin import Room, Schedule, SensorDevice, Reservation, User, STATUSES, CONTROL_POLICIES, FAN_TYPES, DEFAULT_OCCUPANCY_THRESHOLD
+from app.models.admin import Room, Schedule, SensorDevice, Reservation, User, STATUSES, CONTROL_POLICIES, FAN_TYPES
 # LÍNEA NUEVA — antes este import no existía. Trae el modelo de error compartido.
 from app.models.common import ErrorDetail
 from app.dependencies import get_current_user
 from app.services.predictive_service import calculate_cooling_demand
+from app.services.mqtt_ingest import publish_room_threshold
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -39,7 +40,7 @@ class ScheduleIn(BaseModel):
 class RoomDimensionsIn(BaseModel):
     volume_m3: Optional[float] = Field(None, gt=0, le=100000, allow_inf_nan=False)
     # MQ-135 ADC reading (0-4095) from which the node counts the room as occupied.
-    # None → DEFAULT_OCCUPANCY_THRESHOLD.
+    # None: the node uses its own calibration (else its built-in default).
     occupancy_threshold: Optional[int] = Field(None, ge=1, le=4095)
     fan_type: str = "pwm_12v"
     fan_power_w: float = Field(2.4, gt=0, le=10000, allow_inf_nan=False)
@@ -147,7 +148,7 @@ class RoomOut(BaseModel):
     building: Optional[str] = None
     floor: Optional[int] = None
     volume_m3: Optional[float] = None
-    occupancy_threshold: int = DEFAULT_OCCUPANCY_THRESHOLD
+    occupancy_threshold: Optional[int] = None
     fan_type: str = "pwm_12v"
     fan_power_w: float = 2.4
 
@@ -157,7 +158,7 @@ def _room_out(r: Room) -> dict:
         "id": r.id, "name": r.name, "max_capacity": r.max_capacity, "target_temp": r.target_temp,
         "control_policy": r.control_policy, "building": r.building, "floor": r.floor,
         "volume_m3": r.volume_m3,
-        "occupancy_threshold": r.occupancy_threshold or DEFAULT_OCCUPANCY_THRESHOLD,
+        "occupancy_threshold": r.occupancy_threshold,
         "fan_type": r.fan_type or "pwm_12v", "fan_power_w": r.fan_power_w,
     }
 
@@ -338,6 +339,7 @@ def reload_model(current_user: User = Depends(get_current_user)):
 )
 def create_room(
     payload: RoomCreateIn,
+    background: BackgroundTasks,
     db: Session = Depends(get_db_sql),
     current_user: User = Depends(get_current_user),
 ):
@@ -354,7 +356,7 @@ def create_room(
         building=_clean_building(payload.building),
         floor=payload.floor,
         volume_m3=payload.volume_m3,
-        occupancy_threshold=payload.occupancy_threshold or DEFAULT_OCCUPANCY_THRESHOLD,
+        occupancy_threshold=payload.occupancy_threshold,
         fan_type=payload.fan_type,
         fan_power_w=(40.0 if payload.fan_type == "smart_plug" and "fan_power_w" not in payload.model_fields_set else payload.fan_power_w),
     )
@@ -367,6 +369,7 @@ def create_room(
         logger.error("DB error creating room: %s", exc)
         raise HTTPException(status_code=503, detail="Database unavailable") from exc
     logger.info("Admin '%s' created room '%s' (%s).", current_user.username, room.id, room.name)
+    background.add_task(publish_room_threshold, room.id, room.occupancy_threshold)
     return _room_out(room)
 
 
@@ -380,6 +383,7 @@ def create_room(
 def update_room(
     room_id: str,
     payload: RoomUpdateIn,
+    background: BackgroundTasks,
     cascade_sensors: bool = True,
     cascade_reservations: bool = True,
     db: Session = Depends(get_db_sql),
@@ -419,7 +423,7 @@ def update_room(
                 id=new_id, name=payload.name, max_capacity=payload.max_capacity, target_temp=payload.target_temp,
                 control_policy=room.control_policy, building=_clean_building(payload.building), floor=payload.floor,
                 volume_m3=payload.volume_m3,
-                occupancy_threshold=payload.occupancy_threshold or DEFAULT_OCCUPANCY_THRESHOLD,
+                occupancy_threshold=payload.occupancy_threshold,
                 fan_type=payload.fan_type if "fan_type" in payload.model_fields_set else room.fan_type,
                 fan_power_w=_updated_fan_power(payload, room),
             )
@@ -439,6 +443,7 @@ def update_room(
                 "Admin '%s' renamed room '%s' → '%s' (cascade_sensors=%s, cascade_reservations=%s).",
                 current_user.username, room_id, new_id, cascade_sensors, cascade_reservations,
             )
+            background.add_task(publish_room_threshold, new_id, new_room.occupancy_threshold)
             return _room_out(new_room)
 
         # Normal update — no PK change
@@ -448,7 +453,7 @@ def update_room(
         room.building = _clean_building(payload.building)
         room.floor = payload.floor
         room.volume_m3 = payload.volume_m3
-        room.occupancy_threshold = payload.occupancy_threshold or DEFAULT_OCCUPANCY_THRESHOLD
+        room.occupancy_threshold = payload.occupancy_threshold
         room.fan_power_w = _updated_fan_power(payload, room)
         if "fan_type" in payload.model_fields_set:
             room.fan_type = payload.fan_type
@@ -462,6 +467,8 @@ def update_room(
         raise HTTPException(status_code=503, detail="Database unavailable") from exc
 
     logger.info("Admin '%s' updated room '%s'.", current_user.username, room.id)
+    # Takes effect on the node at once (retained): no reprogramming needed.
+    background.add_task(publish_room_threshold, room.id, room.occupancy_threshold)
     return _room_out(room)
 
 
@@ -610,7 +617,7 @@ def setup_room(
                 building=_clean_building(payload.building),
                 floor=payload.floor,
                 volume_m3=payload.volume_m3,
-                occupancy_threshold=payload.occupancy_threshold or DEFAULT_OCCUPANCY_THRESHOLD,
+                occupancy_threshold=payload.occupancy_threshold,
             )
             db.add(room)
             db.flush()
@@ -767,8 +774,8 @@ def node_firmware(
     current_user: User = Depends(get_current_user),
 ):
     """Firmware for one room. `kind=camera` downloads the ESP32-CAM occupancy publisher.
-    The thermal firmware carries the room's occupancy threshold (140 if the room is not registered)
-    and comes in two variants: a 12 V PWM fan on the node, or a fan behind a smart plug."""
+    The thermal firmware gets the room's occupancy threshold over MQTT (ccs/<room>/settings),
+    not here, and comes in two variants: a 12 V PWM fan on the node, or a fan behind a smart plug."""
     _require_admin(current_user)
     if not ROOM_CODE.match(room):
         raise HTTPException(status_code=422, detail="Room code must be 1-20 letters, digits, - or _.")
@@ -785,10 +792,9 @@ def node_firmware(
     ca_start = thermal_code.find('R"PEM(')
     ca_end = thermal_code.find(')PEM"', ca_start)
     root_ca = thermal_code[ca_start + len('R"PEM('):ca_end] if ca_start >= 0 and ca_end > ca_start else ""
-    threshold = (registered.occupancy_threshold if registered else None) or DEFAULT_OCCUPANCY_THRESHOLD
     for token, value in (("__AULA__", room), ("__MQTT_HOST__", NODE_MQTT_HOST),
                          ("__MQTT_PORT__", str(NODE_MQTT_PORT)), ("__MQTT_USER__", NODE_MQTT_USER),
-                         ("__MQTT_ROOT_CA__", root_ca), ("__OCCUPANCY_THRESHOLD__", str(threshold))):
+                         ("__MQTT_ROOT_CA__", root_ca)):
         code = code.replace(token, value)
     return code
 

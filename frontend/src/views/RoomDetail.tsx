@@ -13,7 +13,7 @@ import RoomInfra from '../components/RoomInfra'
 import RoomWeek from '../components/RoomWeek'
 import {
   NodeStatusCard, FW, LiveChart, Panel, SensorCard, stateKey, niceAxis,
-  coBand, humBand, occBand, occupiedPpmAt, isOccupied, tempBand, type Point,
+  adcToPpm, coBand, humBand, occBand, occupiedPpmAt, isOccupied, tempBand, type Point,
 } from '../components/NodeLive'
 import { useNodes } from '../hooks/useNodes'
 import { levelTemp, levelCO2, levelCO, getStatusLabel } from '../utils/sensorColors'
@@ -267,6 +267,9 @@ export default function RoomDetail() {
   const nodeState = latest?.node_state
   const occupiedThreshold = occupiedPpmAt(nodeState, latest?.is_simulated)
   const occupiedNow = isOccupied(nodeState, latest?.co2_ppm, occupiedThreshold)
+  // The live value is what the node uses; the room's value reaches it over MQTT within seconds.
+  const pendingThreshold = !latest?.is_simulated && nodeState?.umbral_ocupacion != null && room?.occupancy_threshold != null
+    && room.occupancy_threshold !== nodeState.umbral_ocupacion ? adcToPpm(room.occupancy_threshold) : null
   const lastNodeReading = readings.find(r => r.node_state?.accion) ?? null
   const nodeMessage = id && nodes[id] && !nodes[id].online
     ? `Nodo desconectado: sin decisiones ${lastNodeReading ? `desde ${timeAgo(lastNodeReading.timestamp, now)}` : 'registradas'}.`
@@ -369,7 +372,7 @@ export default function RoomDetail() {
             <SensorCard label="CO (MQ-7)" value={fmt(latest?.co_ppm, 0)} unit="ppm" band={latest ? coBand(latest.co_ppm ?? 0) : null} />
             {hasNode
               ? <SensorCard label="CO₂ (MQ-135)" value={fmt(latest?.co2_ppm, 0)} unit="ppm"
-                  band={occupiedNow != null ? occBand(occupiedNow, occupiedThreshold) : null} />
+                  band={occupiedNow != null ? occBand(occupiedNow, occupiedThreshold, nodeState?.umbral_origen, pendingThreshold) : null} />
               : <SensorCard label="Ocupación estimada" value={fmt(action?.actual_occupancy, 0)} unit={`/ ${room?.max_capacity ?? '—'}`}
                   band={latest ? { text: `CO₂ ${fmt(latest.co2_ppm, 0)} ppm`, tone: LEVEL_TONE[levelCO2(latest.co2_ppm ?? 0)] } : null} />}
             </div>

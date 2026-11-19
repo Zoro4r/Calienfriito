@@ -70,6 +70,7 @@ export interface NodeState {
   uptime_s?: number
   co2_proxy?: number
   umbral_ocupacion?: number   // MQ-135 ADC from which the node counts the room as occupied (set from the dashboard)
+  umbral_origen?: 'aula' | 'calibracion' | 'predeterminado'   // where that threshold comes from
   ocupado?: boolean           // occupancy as the node decided it (newer firmware, with hysteresis)
   fallo_dht?: boolean         // the DHT missed 3 reads in a row: safe state
 }

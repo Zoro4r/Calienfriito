@@ -48,8 +48,10 @@ async def startup_ml():
 
 @app.on_event("startup")
 async def startup_mqtt():
-    from app.services.mqtt_ingest import start_mqtt_ingest
+    from app.services.mqtt_ingest import start_mqtt_ingest, sync_room_thresholds
     start_mqtt_ingest()
+    # Re-publish every room's threshold (retained), so the broker holds what the database says.
+    asyncio.create_task(sync_room_thresholds())
 
 
 @app.on_event("shutdown")
@@ -121,8 +123,21 @@ def _run_migrations(engine, text):
         "ALTER TABLE rooms ADD COLUMN IF NOT EXISTS area_m2 DOUBLE PRECISION",
         "ALTER TABLE rooms ADD COLUMN IF NOT EXISTS ceiling_height_m DOUBLE PRECISION",
         "ALTER TABLE rooms ADD COLUMN IF NOT EXISTS volume_m3 DOUBLE PRECISION",
-        # rooms: MQ-135 occupancy threshold baked into the node firmware (existing rooms get 140)
-        "ALTER TABLE rooms ADD COLUMN IF NOT EXISTS occupancy_threshold INTEGER NOT NULL DEFAULT 140",
+        # rooms: MQ-135 occupancy threshold set from the dashboard (NULL: the node's calibration)
+        "ALTER TABLE rooms ADD COLUMN IF NOT EXISTS occupancy_threshold INTEGER",
+        # One-time: the column first shipped NOT NULL DEFAULT 140, filled in for every room.
+        # Those 140s were the default, not a choice: clear them so the node's calibration applies.
+        """
+        DO $$
+        BEGIN
+            IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'rooms'
+                       AND column_name = 'occupancy_threshold' AND column_default IS NOT NULL) THEN
+                ALTER TABLE rooms ALTER COLUMN occupancy_threshold DROP DEFAULT;
+                ALTER TABLE rooms ALTER COLUMN occupancy_threshold DROP NOT NULL;
+                UPDATE rooms SET occupancy_threshold = NULL WHERE occupancy_threshold = 140;
+            END IF;
+        END $$;
+        """,
         # One-time backfill: rooms registered with surface × height keep their volume.
         """
         UPDATE rooms SET volume_m3 = round((area_m2 * ceiling_height_m)::numeric, 2)

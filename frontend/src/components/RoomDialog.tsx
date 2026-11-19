@@ -99,7 +99,7 @@ type FormState = ReturnType<typeof useRoomForm>
 
 /** What the occupancy threshold means, under the form. */
 function thresholdHint(value: string) {
-  return `Umbral de ocupación: nivel de CO₂ (MQ-135) desde el que el nodo cuenta el aula como ocupada.${value === '' ? ` Vacío usa ${adcToPpm(FW.nodeOccupiedAdc)} ppm.` : ''} Se aplica al descargar de nuevo el programa del nodo.`
+  return `Umbral de ocupación: nivel de CO₂ (MQ-135) desde el que el nodo cuenta el aula como ocupada. Manda sobre la calibración del nodo y se aplica al guardar.${value === '' ? ` Vacío: usa la calibración del nodo o, sin calibrar, ${adcToPpm(FW.nodeOccupiedAdc)} ppm.` : ''}`
 }
 
 export function RoomFields({ form, onSubmit }: { form: FormState; onSubmit: () => void }) {
@@ -116,7 +116,7 @@ export function RoomFields({ form, onSubmit }: { form: FormState; onSubmit: () =
       <span className="mt-1 block text-xs text-slate-500">Es también el código del aula: el que pondrás como AULA en el ESP32.</span>
       <div className="mt-3 grid grid-cols-2 gap-3">
         {field('volume_m3', 'Volumen (m³)', { type: 'number', min: 0.01, max: 100000, step: 'any', placeholder: 'ej. 180' })}
-        {field('occupancy_ppm', 'Umbral de ocupación (ppm)', { type: 'number', min: 401, max: 2000, step: 1, placeholder: String(adcToPpm(FW.nodeOccupiedAdc)) })}
+        {field('occupancy_ppm', 'Umbral de ocupación (ppm)', { type: 'number', min: 401, max: 2000, step: 1, placeholder: 'calibración del nodo' })}
       </div>
       <p className="mt-1 text-xs text-slate-500">Volumen: superficie × altura del techo; lo usa el modelo de IA y puede quedar vacío. {thresholdHint(f.occupancy_ppm)}</p>
       <button type="submit" className="hidden" />
@@ -130,7 +130,7 @@ export function RoomFields({ form, onSubmit }: { form: FormState; onSubmit: () =
       {field('floor', 'Piso', { type: 'number', placeholder: 'ej. 6', min: -5, max: 99 })}
       {field('max_capacity', 'Capacidad (personas)', { type: 'number', min: 1 })}
       {field('volume_m3', 'Volumen (m³)', { type: 'number', min: 0.01, max: 100000, step: 'any', placeholder: 'superficie × altura' })}
-      {field('occupancy_ppm', 'Umbral de ocupación (ppm)', { type: 'number', min: 401, max: 2000, step: 1, placeholder: String(adcToPpm(FW.nodeOccupiedAdc)) })}
+      {field('occupancy_ppm', 'Umbral de ocupación (ppm)', { type: 'number', min: 401, max: 2000, step: 1, placeholder: 'calibración del nodo' })}
       {field('target_temp', 'Temperatura objetivo (°C)', { type: 'number', min: 16, max: 30, step: 0.5 })}
       <label className="block">
         <span className="field-label">Tipo de ventilador</span>

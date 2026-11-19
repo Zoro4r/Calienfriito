@@ -133,7 +133,7 @@ def test_room_occupancy_threshold_defaults_and_range():
     from app.routes.admin import RoomCreateIn
 
     base = {"id": "B201", "name": "B201", "max_capacity": 30, "target_temp": 24}
-    assert RoomCreateIn(**base).occupancy_threshold is None   # server stores 140
+    assert RoomCreateIn(**base).occupancy_threshold is None   # the node's calibration decides
     assert RoomCreateIn(**base, occupancy_threshold=300).occupancy_threshold == 300
     for bad in (0, 4096):
         with pytest.raises(ValidationError):
