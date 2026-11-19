@@ -25,11 +25,10 @@ interface History {
   equipment?: { label: string }
   series?: Point[]; classes?: Interval[]; heater?: Interval[]; fan?: (Interval & { level: number })[]; summary?: Summary
 }
-interface Row { t: number; temp: number | null; hum: number | null; co2: number | null; co: number | null; fan: number | null }
+interface Row { t: number; temp: number; hum: number; co2: number | null; co: number; fan: number }
 type Key = 'temp' | 'hum' | 'co2' | 'co'
 
 const HOUR = 3_600_000
-const GAP_MS = 15 * 60_000   // a jump between 5-min points longer than this is a gap in the data
 const LINE = '#38bdf8'
 const FAN_COLOR = '#38bdf8'
 const CLASS_FILL = '#94a3b8'
@@ -131,15 +130,7 @@ export default function RoomHistory({ roomId }: { roomId: string }) {
   if (!data.date || !data.start || !data.end) return <p className="text-sm text-slate-400">Esta aula todavía no tiene lecturas del nodo.</p>
 
   const start = parseUtc(data.start).getTime(), end = parseUtc(data.end).getTime()
-  // Where the node sent nothing (more than two 5-min points missing), an empty row breaks the
-  // lines: otherwise the curve bridges the gap and draws values that were never measured.
-  const rows: Row[] = []
-  for (const p of data.series ?? []) {
-    const t = parseUtc(p.t).getTime()
-    const prev = rows[rows.length - 1]
-    if (prev && t - prev.t > GAP_MS) rows.push({ t: prev.t + 5 * 60_000, temp: null, hum: null, co2: null, co: null, fan: null })
-    rows.push({ t, temp: p.temp, hum: p.hum, co2: p.co2, co: p.co, fan: p.fan })
-  }
+  const rows: Row[] = (data.series ?? []).map(p => ({ t: parseUtc(p.t).getTime(), temp: p.temp, hum: p.hum, co2: p.co2, co: p.co, fan: p.fan }))
   const classes = (data.classes ?? []).map(c => ({ from: parseUtc(c.start).getTime(), to: c.end ? parseUtc(c.end).getTime() : end }))
   // Fan periods at their real power level; a 5-min point shows the highest level it touches.
   const fanRuns = (data.fan ?? []).map(f => ({ from: parseUtc(f.start).getTime(), to: f.end ? parseUtc(f.end).getTime() : end, level: f.level }))
@@ -214,7 +205,7 @@ export default function RoomHistory({ roomId }: { roomId: string }) {
                     <Tooltip content={() => null} cursor={{ stroke: '#64748b', strokeDasharray: '3 3' }} />
                     {classAreas}
                     {m.refs.map(r => <ReferenceLine key={r.y} y={r.y} stroke={r.color} strokeDasharray="4 4" strokeOpacity={0.6} />)}
-                    <Line type="monotone" dataKey={m.key} stroke={LINE} strokeWidth={1.75} dot={false} isAnimationActive={false}
+                    <Line type="monotone" dataKey={m.key} stroke={LINE} strokeWidth={1.75} dot={false} connectNulls isAnimationActive={false}
                       activeDot={{ r: 4, fill: LINE, stroke: '#0f172a', strokeWidth: 2 }} />
                   </ComposedChart>
                 </ResponsiveContainer>
