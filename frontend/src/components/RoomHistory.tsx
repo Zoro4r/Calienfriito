@@ -147,7 +147,7 @@ export default function RoomHistory({ roomId }: { roomId: string }) {
     onMouseLeave: () => setHover(null),
   }
   const classAreas = classes.map(c => (
-    <ReferenceArea key={c.from} x1={Math.max(c.from, start)} x2={Math.min(c.to - 2 * 60_000, end)} fill={CLASS_FILL} fillOpacity={0.12} stroke="none" />
+    <ReferenceArea key={`class-${c.from}`} x1={Math.max(c.from, start)} x2={Math.min(c.to - 2 * 60_000, end)} fill={CLASS_FILL} fillOpacity={0.12} stroke="none" />
   ))
   const xAxis = (show: boolean) => (
     <XAxis dataKey="t" type="number" scale="time" domain={[start, end]} allowDataOverflow ticks={xTicks} interval={0}
@@ -225,7 +225,7 @@ export default function RoomHistory({ roomId }: { roomId: string }) {
                 <Tooltip content={() => null} cursor={{ stroke: '#64748b', strokeDasharray: '3 3' }} />
                 {classAreas}
                 {fanRuns.map(f => (
-                  <ReferenceArea key={f.from} x1={Math.max(f.from, start)} x2={Math.min(f.to, end)} y1={0} y2={f.level} fill={FAN_COLOR} fillOpacity={0.6} stroke="none" />
+                  <ReferenceArea key={`fan-${f.from}`} x1={Math.max(f.from, start)} x2={Math.min(f.to, end)} y1={0} y2={f.level} fill={FAN_COLOR} fillOpacity={0.6} stroke="none" />
                 ))}
                 <Line dataKey="fan" stroke="none" dot={false} activeDot={false} isAnimationActive={false} />
               </ComposedChart>
