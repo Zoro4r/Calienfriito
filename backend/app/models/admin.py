@@ -32,6 +32,9 @@ class Room(Base):
     name = Column(String, unique=True, nullable=False)
     max_capacity = Column(Integer, nullable=False)
     target_temp = Column(Float, nullable=False)
+    # Interior air volume, entered directly. area_m2 and ceiling_height_m are legacy
+    # columns kept only so older rows can be backfilled (see main.py migrations).
+    volume_m3 = Column(Float, nullable=True)
     area_m2 = Column(Float, nullable=True)
     ceiling_height_m = Column(Float, nullable=True)
     fan_type = Column(String, nullable=False, default="pwm_12v", server_default="pwm_12v")

@@ -33,8 +33,6 @@ interface RoomInfo {
   floor?: number | null
   fan_type?: 'pwm_12v' | 'smart_plug'
   fan_power_w?: number | null
-  area_m2?: number | null
-  ceiling_height_m?: number | null
   volume_m3?: number | null
 }
 

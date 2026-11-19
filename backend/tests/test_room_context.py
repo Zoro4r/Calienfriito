@@ -43,24 +43,21 @@ def test_schedule_is_used_when_there_is_no_reservation(db):
 
 def test_registered_room_dimensions_reach_predictor_context(db):
     room = db.query(Room).filter(Room.id == "A403").one()
-    room.area_m2 = 60
-    room.ceiling_height_m = 3.2
+    room.volume_m3 = 192
     db.commit()
     ctx = get_room_context(db, "s-A403", READING_UTC)
     assert ctx["volume_m3"] == 192
 
 
-def test_room_dimensions_must_be_complete_and_positive():
+def test_room_volume_must_be_positive():
     from pydantic import ValidationError
     from app.routes.admin import RoomCreateIn
 
     base = {"id": "B201", "name": "B201", "max_capacity": 30, "target_temp": 24}
-    valid = RoomCreateIn(**base, area_m2=60, ceiling_height_m=3)
-    assert valid.area_m2 * valid.ceiling_height_m == 180
+    assert RoomCreateIn(**base, volume_m3=180).volume_m3 == 180
+    assert RoomCreateIn(**base).volume_m3 is None
     with pytest.raises(ValidationError):
-        RoomCreateIn(**base, area_m2=60)
-    with pytest.raises(ValidationError):
-        RoomCreateIn(**base, area_m2=-1, ceiling_height_m=3)
+        RoomCreateIn(**base, volume_m3=-1)
 
 
 def test_room_fan_defaults_and_rejects_invalid_configuration():

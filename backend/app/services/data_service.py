@@ -90,7 +90,7 @@ def get_room_context(db_sql, sensor_id: str, reading_timestamp: datetime) -> dic
         "room_name": room.name,
         "max_capacity": room.max_capacity,
         "target_temp": room.target_temp,
-        "volume_m3": room.area_m2 * room.ceiling_height_m if room.area_m2 is not None and room.ceiling_height_m is not None else None,
+        "volume_m3": room.volume_m3,
         "expected_people": expected_people,
         "expected_source": expected_source,
         "control_policy": getattr(room, "control_policy", "auto") or "auto",

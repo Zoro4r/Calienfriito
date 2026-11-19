@@ -37,15 +37,12 @@ class ScheduleIn(BaseModel):
 
 
 class RoomDimensionsIn(BaseModel):
-    area_m2: Optional[float] = Field(None, gt=0, le=10000, allow_inf_nan=False)
-    ceiling_height_m: Optional[float] = Field(None, gt=0, le=20, allow_inf_nan=False)
+    volume_m3: Optional[float] = Field(None, gt=0, le=100000, allow_inf_nan=False)
     fan_type: str = "pwm_12v"
     fan_power_w: float = Field(2.4, gt=0, le=10000, allow_inf_nan=False)
 
     @model_validator(mode="after")
-    def dimensions_together(self):
-        if (self.area_m2 is None) != (self.ceiling_height_m is None):
-            raise ValueError("La superficie y la altura deben indicarse juntas.")
+    def valid_fan(self):
         if self.fan_type not in FAN_TYPES:
             raise ValueError("Tipo de ventilador inválido.")
         return self
@@ -146,8 +143,6 @@ class RoomOut(BaseModel):
     control_policy: Optional[str] = None
     building: Optional[str] = None
     floor: Optional[int] = None
-    area_m2: Optional[float] = None
-    ceiling_height_m: Optional[float] = None
     volume_m3: Optional[float] = None
     fan_type: str = "pwm_12v"
     fan_power_w: float = 2.4
@@ -157,8 +152,7 @@ def _room_out(r: Room) -> dict:
     return {
         "id": r.id, "name": r.name, "max_capacity": r.max_capacity, "target_temp": r.target_temp,
         "control_policy": r.control_policy, "building": r.building, "floor": r.floor,
-        "area_m2": r.area_m2, "ceiling_height_m": r.ceiling_height_m,
-        "volume_m3": round(r.area_m2 * r.ceiling_height_m, 2) if r.area_m2 is not None and r.ceiling_height_m is not None else None,
+        "volume_m3": r.volume_m3,
         "fan_type": r.fan_type or "pwm_12v", "fan_power_w": r.fan_power_w,
     }
 
@@ -354,8 +348,7 @@ def create_room(
         target_temp=payload.target_temp,
         building=_clean_building(payload.building),
         floor=payload.floor,
-        area_m2=payload.area_m2,
-        ceiling_height_m=payload.ceiling_height_m,
+        volume_m3=payload.volume_m3,
         fan_type=payload.fan_type,
         fan_power_w=(40.0 if payload.fan_type == "smart_plug" and "fan_power_w" not in payload.model_fields_set else payload.fan_power_w),
     )
@@ -419,7 +412,7 @@ def update_room(
             new_room = Room(
                 id=new_id, name=payload.name, max_capacity=payload.max_capacity, target_temp=payload.target_temp,
                 control_policy=room.control_policy, building=_clean_building(payload.building), floor=payload.floor,
-                area_m2=payload.area_m2, ceiling_height_m=payload.ceiling_height_m,
+                volume_m3=payload.volume_m3,
                 fan_type=payload.fan_type if "fan_type" in payload.model_fields_set else room.fan_type,
                 fan_power_w=_updated_fan_power(payload, room),
             )
@@ -447,8 +440,7 @@ def update_room(
         room.target_temp = payload.target_temp
         room.building = _clean_building(payload.building)
         room.floor = payload.floor
-        room.area_m2 = payload.area_m2
-        room.ceiling_height_m = payload.ceiling_height_m
+        room.volume_m3 = payload.volume_m3
         room.fan_power_w = _updated_fan_power(payload, room)
         if "fan_type" in payload.model_fields_set:
             room.fan_type = payload.fan_type
@@ -597,9 +589,8 @@ def setup_room(
             room.target_temp = payload.target_temp
             room.building = _clean_building(payload.building) or room.building
             room.floor = payload.floor if payload.floor is not None else room.floor
-            if payload.area_m2 is not None:
-                room.area_m2 = payload.area_m2
-                room.ceiling_height_m = payload.ceiling_height_m
+            if payload.volume_m3 is not None:
+                room.volume_m3 = payload.volume_m3
         else:
             room = Room(
                 id=payload.id,
@@ -608,8 +599,7 @@ def setup_room(
                 target_temp=payload.target_temp,
                 building=_clean_building(payload.building),
                 floor=payload.floor,
-                area_m2=payload.area_m2,
-                ceiling_height_m=payload.ceiling_height_m,
+                volume_m3=payload.volume_m3,
             )
             db.add(room)
             db.flush()

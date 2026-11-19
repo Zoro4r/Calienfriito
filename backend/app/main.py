@@ -120,6 +120,12 @@ def _run_migrations(engine, text):
         "ALTER TABLE rooms ADD COLUMN IF NOT EXISTS floor INTEGER",
         "ALTER TABLE rooms ADD COLUMN IF NOT EXISTS area_m2 DOUBLE PRECISION",
         "ALTER TABLE rooms ADD COLUMN IF NOT EXISTS ceiling_height_m DOUBLE PRECISION",
+        "ALTER TABLE rooms ADD COLUMN IF NOT EXISTS volume_m3 DOUBLE PRECISION",
+        # One-time backfill: rooms registered with surface × height keep their volume.
+        """
+        UPDATE rooms SET volume_m3 = round((area_m2 * ceiling_height_m)::numeric, 2)
+        WHERE volume_m3 IS NULL AND area_m2 IS NOT NULL AND ceiling_height_m IS NOT NULL
+        """,
         "ALTER TABLE rooms ADD COLUMN IF NOT EXISTS fan_type VARCHAR NOT NULL DEFAULT 'pwm_12v'",
         "ALTER TABLE rooms ADD COLUMN IF NOT EXISTS fan_power_w DOUBLE PRECISION NOT NULL DEFAULT 2.4",
         "CREATE INDEX IF NOT EXISTS ix_rooms_building ON rooms (building)",
