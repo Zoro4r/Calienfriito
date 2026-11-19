@@ -115,8 +115,8 @@ bool inaDisponible = false;
 #define FAN_PWM_PIN  -1   // Sin ventilador en este protoboard
 #define FAN_TACH_PIN -1   // Sin tacometro
 #define BUZZER_PIN   -1   // Buzzer del laboratorio: especificaciones electricas por confirmar
-#define LED_R_PIN    13   // D13
-#define LED_G_PIN    14   // D14
+#define LED_R_PIN    14   // D14
+#define LED_G_PIN    13   // D13
 #define LED_B_PIN    27   // D27
 #define HEATER_PIN   -1   // Sin calefactor en este protoboard
 // Una placa sin tacometro o sin calefactor pone su pin en -1: el programa no lo toca.
@@ -953,7 +953,7 @@ void setup() {
   LOGF("SIS", "Ventilador", "sin conectar");
   LOGF("SIS", "Calefactor", "sin conectar");
   LOGF("SIS", "Buzzer",     "sin conectar; revisar especificaciones");
-  LOGF("SIS", "LED RGB",    "actuador | D13 (R), D14 (G), D27 (B)");
+  LOGF("SIS", "LED RGB",    "actuador | D14 (R), D13 (G), D27 (B)");
   LOG("SIS", "Estado inicial: %s | LED=%s", nombreAccion(accionActual), colorLed);
 
   espClient.setCACert(MQTT_ROOT_CA);
