@@ -20,7 +20,7 @@ const H0 = 0, H1 = 24                        // the whole day; the grid scrolls
 const HOUR_PX = 44                           // height of one hour
 const SCROLL_TO_H = 7                        // opens at 07:00
 const DAY_NAMES = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom']
-const DAYS_LONG = ['lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábados']
+const DAYS_LONG = ['lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábados', 'domingos']
 
 const minutes = (hm: string) => { const [h, m] = hm.split(':').map(Number); return h * 60 + m }
 const hm = (min: number) => `${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`
@@ -140,9 +140,9 @@ export default function RoomWeek({ room }: { room: Room | undefined }) {
   }, [anchor, version])
 
   const blocks = week?.blocks ?? []
-  // Classes run Monday to Saturday: no Sunday column.
+  // Monday to Sunday.
   const today = localDay(now)
-  const days = [0, 1, 2, 3, 4, 5]
+  const days = [0, 1, 2, 3, 4, 5, 6]
   const todayIdx = days.find(d => shiftDayBy(anchor, d) === today)
   const nowMin = new Date(now).getHours() * 60 + new Date(now).getMinutes()
 

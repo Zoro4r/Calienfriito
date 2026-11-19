@@ -987,7 +987,7 @@ def room_schedules(
 
 
 class ScheduleIn(BaseModel):
-    day_of_week: int = Field(..., ge=0, le=5)                          # 0=Monday … 5=Saturday
+    day_of_week: int = Field(..., ge=0, le=6)                          # 0=Monday … 6=Sunday
     start_time: str = Field(..., pattern=r"^([01]\d|2[0-3]):[0-5]\d$")  # HH:MM local
     end_time: str = Field(..., pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
     expected_people: int = Field(..., ge=1, le=1000)

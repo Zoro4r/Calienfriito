@@ -220,7 +220,7 @@ def test_collaborator_cannot_add_classes(as_role):
 def test_class_payload_is_validated(as_role):
     as_role("admin")
     r = client.post("/api/v1/admin/rooms/B101/schedules",
-                    json={"day_of_week": 6, "start_time": "8:00", "end_time": "10:00", "expected_people": 0})
+                    json={"day_of_week": 7, "start_time": "8:00", "end_time": "10:00", "expected_people": 0})
     assert r.status_code == 422
 
 
