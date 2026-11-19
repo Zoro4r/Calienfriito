@@ -61,6 +61,30 @@ def desired_from_node(node_state: dict | None) -> bool | None:
     return pwm > 0
 
 
+def with_plug_fan(node_state: dict) -> dict:
+    """The fan's state as the plug drives it, for a node with no fan pin of its own.
+
+    Such a node always reports ventilador_pwm 0 (nothing on its pin), so history and
+    energy would show the fan off while the plug runs it. The plug is all-or-nothing:
+    on (255) when the node decides to cool, off (0) otherwise.
+    """
+    if node_state.get("ventilador_conectado") is not False:
+        return node_state
+    desired = desired_from_node(node_state)
+    if desired is None:
+        return node_state
+    return {**node_state, "ventilador_pwm": 255 if desired else 0}
+
+
+def room_uses_plug(db_sql, sensor_id: str) -> bool:
+    """True when the sensor's room drives its fan through the smart plug."""
+    from app.models.admin import SensorDevice
+    row = (db_sql.query(Room.fan_type)
+           .join(SensorDevice, SensorDevice.room_id == Room.id)
+           .filter(SensorDevice.id == sensor_id).first())
+    return bool(row) and row[0] == "smart_plug"
+
+
 def _sole_smart_room(db_sql) -> str | None:
     rooms = db_sql.query(Room).filter(Room.fan_type == "smart_plug").limit(2).all()
     return rooms[0].id if len(rooms) == 1 else None

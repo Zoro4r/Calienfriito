@@ -53,3 +53,12 @@ def test_telemetry_deduplicates_and_refuses_ambiguous_room(monkeypatch):
     asyncio.run(smart_plug.sync_from_telemetry(None, "A101", {"ventilador_pwm": 0}))
     assert calls == [True]
     assert smart_plug.status()["status"] == "ambiguous_room"
+
+
+def test_plug_fan_follows_decision_when_node_has_no_fan_pin():
+    ns = {"ventilador_conectado": False, "ventilador_pwm": 0, "ventilador_pwm_objetivo": 255}
+    assert smart_plug.with_plug_fan(ns)["ventilador_pwm"] == 255
+    assert smart_plug.with_plug_fan({**ns, "ventilador_pwm_objetivo": 0})["ventilador_pwm"] == 0
+    # A node that drives its own fan keeps what it reports.
+    wired = {"ventilador_conectado": True, "ventilador_pwm": 128, "ventilador_pwm_objetivo": 255}
+    assert smart_plug.with_plug_fan(wired) == wired

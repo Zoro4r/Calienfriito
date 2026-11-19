@@ -275,6 +275,13 @@ async def _ingest(topic: str, payload: bytes) -> None:
 
     db_sql = SessionLocal()
     try:
+        from fastapi.concurrency import run_in_threadpool
+        from app.services.smart_plug import room_uses_plug, with_plug_fan
+
+        # A plug room's node has no fan pin: store the fan as the plug runs it.
+        if (reading.node_state and reading.node_state.get("ventilador_conectado") is False
+                and await run_in_threadpool(room_uses_plug, db_sql, reading.sensor_id)):
+            reading.node_state = with_plug_fan(reading.node_state)
         result = await process_reading(get_db(), reading, db_sql=db_sql, origin=origin)
         # The plug follows the node's own decision, so it syncs even when the room's
         # server-side control is disabled (no room_context then, only room_id).
