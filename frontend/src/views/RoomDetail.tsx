@@ -34,6 +34,7 @@ interface RoomInfo {
   fan_type?: 'pwm_12v' | 'smart_plug'
   fan_power_w?: number | null
   volume_m3?: number | null
+  occupancy_threshold?: number | null
 }
 
 interface SensorDevice {

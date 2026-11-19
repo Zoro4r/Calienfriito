@@ -126,3 +126,15 @@ def test_occupancy_forecast_follows_schedule_and_reservations(db):
     fc = occupancy_forecast(db, "A403", datetime(2026, 10, 26, 14, 0), 195)
     assert fc[90] == (True, 12.0)      # 10:30, the reservation wins
     assert fc[125] == (True, 30.0)     # 11:05, back to the schedule
+
+
+def test_room_occupancy_threshold_defaults_and_range():
+    from pydantic import ValidationError
+    from app.routes.admin import RoomCreateIn
+
+    base = {"id": "B201", "name": "B201", "max_capacity": 30, "target_temp": 24}
+    assert RoomCreateIn(**base).occupancy_threshold is None   # server stores 140
+    assert RoomCreateIn(**base, occupancy_threshold=300).occupancy_threshold == 300
+    for bad in (0, 4096):
+        with pytest.raises(ValidationError):
+            RoomCreateIn(**base, occupancy_threshold=bad)

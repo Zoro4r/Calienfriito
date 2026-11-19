@@ -17,7 +17,7 @@ from app.config import LOCAL_UTC_OFFSET_HOURS, NODE_MQTT_HOST, NODE_MQTT_PORT, N
 from app.core.timeutils import ensure_local, to_local
 from app.database import get_db
 from app.database_sql import get_db_sql
-from app.models.admin import Room, Schedule, SensorDevice, Reservation, User, STATUSES, CONTROL_POLICIES, FAN_TYPES
+from app.models.admin import Room, Schedule, SensorDevice, Reservation, User, STATUSES, CONTROL_POLICIES, FAN_TYPES, DEFAULT_OCCUPANCY_THRESHOLD
 # LÍNEA NUEVA — antes este import no existía. Trae el modelo de error compartido.
 from app.models.common import ErrorDetail
 from app.dependencies import get_current_user
@@ -38,6 +38,9 @@ class ScheduleIn(BaseModel):
 
 class RoomDimensionsIn(BaseModel):
     volume_m3: Optional[float] = Field(None, gt=0, le=100000, allow_inf_nan=False)
+    # MQ-135 ADC reading (0-4095) from which the node counts the room as occupied.
+    # None → DEFAULT_OCCUPANCY_THRESHOLD.
+    occupancy_threshold: Optional[int] = Field(None, ge=1, le=4095)
     fan_type: str = "pwm_12v"
     fan_power_w: float = Field(2.4, gt=0, le=10000, allow_inf_nan=False)
 
@@ -144,6 +147,7 @@ class RoomOut(BaseModel):
     building: Optional[str] = None
     floor: Optional[int] = None
     volume_m3: Optional[float] = None
+    occupancy_threshold: int = DEFAULT_OCCUPANCY_THRESHOLD
     fan_type: str = "pwm_12v"
     fan_power_w: float = 2.4
 
@@ -153,6 +157,7 @@ def _room_out(r: Room) -> dict:
         "id": r.id, "name": r.name, "max_capacity": r.max_capacity, "target_temp": r.target_temp,
         "control_policy": r.control_policy, "building": r.building, "floor": r.floor,
         "volume_m3": r.volume_m3,
+        "occupancy_threshold": r.occupancy_threshold or DEFAULT_OCCUPANCY_THRESHOLD,
         "fan_type": r.fan_type or "pwm_12v", "fan_power_w": r.fan_power_w,
     }
 
@@ -349,6 +354,7 @@ def create_room(
         building=_clean_building(payload.building),
         floor=payload.floor,
         volume_m3=payload.volume_m3,
+        occupancy_threshold=payload.occupancy_threshold or DEFAULT_OCCUPANCY_THRESHOLD,
         fan_type=payload.fan_type,
         fan_power_w=(40.0 if payload.fan_type == "smart_plug" and "fan_power_w" not in payload.model_fields_set else payload.fan_power_w),
     )
@@ -413,6 +419,7 @@ def update_room(
                 id=new_id, name=payload.name, max_capacity=payload.max_capacity, target_temp=payload.target_temp,
                 control_policy=room.control_policy, building=_clean_building(payload.building), floor=payload.floor,
                 volume_m3=payload.volume_m3,
+                occupancy_threshold=payload.occupancy_threshold or DEFAULT_OCCUPANCY_THRESHOLD,
                 fan_type=payload.fan_type if "fan_type" in payload.model_fields_set else room.fan_type,
                 fan_power_w=_updated_fan_power(payload, room),
             )
@@ -441,6 +448,7 @@ def update_room(
         room.building = _clean_building(payload.building)
         room.floor = payload.floor
         room.volume_m3 = payload.volume_m3
+        room.occupancy_threshold = payload.occupancy_threshold or DEFAULT_OCCUPANCY_THRESHOLD
         room.fan_power_w = _updated_fan_power(payload, room)
         if "fan_type" in payload.model_fields_set:
             room.fan_type = payload.fan_type
@@ -591,6 +599,8 @@ def setup_room(
             room.floor = payload.floor if payload.floor is not None else room.floor
             if payload.volume_m3 is not None:
                 room.volume_m3 = payload.volume_m3
+            if payload.occupancy_threshold is not None:
+                room.occupancy_threshold = payload.occupancy_threshold
         else:
             room = Room(
                 id=payload.id,
@@ -600,6 +610,7 @@ def setup_room(
                 building=_clean_building(payload.building),
                 floor=payload.floor,
                 volume_m3=payload.volume_m3,
+                occupancy_threshold=payload.occupancy_threshold or DEFAULT_OCCUPANCY_THRESHOLD,
             )
             db.add(room)
             db.flush()
@@ -747,9 +758,11 @@ ROOM_CODE = re.compile(r"^[A-Za-z0-9_-]{1,20}$")
 def node_firmware(
     room: str = Query(..., description="Room code, used as AULA on the node"),
     kind: str = Query("thermal", pattern="^(thermal|camera)$"),
+    db: Session = Depends(get_db_sql),
     current_user: User = Depends(get_current_user),
 ):
-    """Firmware for one room. `kind=camera` downloads the ESP32-CAM occupancy publisher."""
+    """Firmware for one room. `kind=camera` downloads the ESP32-CAM occupancy publisher.
+    The thermal firmware carries the room's occupancy threshold (140 if the room is not registered)."""
     _require_admin(current_user)
     if not ROOM_CODE.match(room):
         raise HTTPException(status_code=422, detail="Room code must be 1-20 letters, digits, - or _.")
@@ -761,9 +774,11 @@ def node_firmware(
     ca_start = thermal_code.find('R"PEM(')
     ca_end = thermal_code.find(')PEM"', ca_start)
     root_ca = thermal_code[ca_start + len('R"PEM('):ca_end] if ca_start >= 0 and ca_end > ca_start else ""
+    registered = db.query(Room).filter(Room.id == room).first()
+    threshold = (registered.occupancy_threshold if registered else None) or DEFAULT_OCCUPANCY_THRESHOLD
     for token, value in (("__AULA__", room), ("__MQTT_HOST__", NODE_MQTT_HOST),
                          ("__MQTT_PORT__", str(NODE_MQTT_PORT)), ("__MQTT_USER__", NODE_MQTT_USER),
-                         ("__MQTT_ROOT_CA__", root_ca)):
+                         ("__MQTT_ROOT_CA__", root_ca), ("__OCCUPANCY_THRESHOLD__", str(threshold))):
         code = code.replace(token, value)
     return code
 

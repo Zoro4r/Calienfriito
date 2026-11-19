@@ -11,6 +11,9 @@ STATUSES = {"pending", "active", "inactive"}
 #   manual    → no prediction; hold the room at its configured target_temp
 CONTROL_POLICIES = {"auto", "heuristic", "manual"}
 FAN_TYPES = {"pwm_12v", "smart_plug"}
+# MQ-135 reading (ADC 0-4095) from which the node counts the room as occupied, when a
+# room has none of its own. Calibrated on the team's PCB on 2026-11-18.
+DEFAULT_OCCUPANCY_THRESHOLD = 140
 
 
 class User(Base):
@@ -39,6 +42,8 @@ class Room(Base):
     ceiling_height_m = Column(Float, nullable=True)
     fan_type = Column(String, nullable=False, default="pwm_12v", server_default="pwm_12v")
     fan_power_w = Column(Float, nullable=False, default=2.4, server_default="2.4")
+    occupancy_threshold = Column(Integer, nullable=False, default=DEFAULT_OCCUPANCY_THRESHOLD,
+                                 server_default=str(DEFAULT_OCCUPANCY_THRESHOLD))
     control_policy = Column(String, nullable=False, default="auto", server_default="auto")
     # Location, used to group and filter rooms in the UI (building → floor → room).
     building = Column(String, nullable=True, index=True)

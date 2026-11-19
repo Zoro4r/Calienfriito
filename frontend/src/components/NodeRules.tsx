@@ -69,7 +69,7 @@ function OccupancyThreshold({ roomId, sensorId }: { roomId: string; sensorId?: s
       <div className="flex flex-wrap items-center gap-x-8 gap-y-3 px-5 py-3.5 text-sm">
         <span className="min-w-0 flex-1 text-slate-400">
           Desde este nivel de CO₂ (MQ-135) el aula cuenta como ocupada.
-          {CAN_SET_THRESHOLD ? '' : ' Por ahora se cambia en el programa del ESP32.'}
+          {CAN_SET_THRESHOLD ? '' : ' Se cambia en Infraestructura → Editar aula y se aplica al descargar de nuevo el programa del nodo.'}
         </span>
         <span className="flex items-baseline gap-2"><span className="text-xs text-slate-500">Umbral</span><span className="text-xl font-semibold text-white">{current ?? '—'}</span><span className="text-xs text-slate-500">ppm</span></span>
         <span className="flex items-baseline gap-2"><span className="text-xs text-slate-500">Ahora</span><span className="text-xl font-semibold text-white">{ppm != null ? Math.round(ppm) : '—'}</span><span className="text-xs text-slate-500">ppm</span>

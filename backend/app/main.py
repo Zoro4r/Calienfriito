@@ -121,6 +121,8 @@ def _run_migrations(engine, text):
         "ALTER TABLE rooms ADD COLUMN IF NOT EXISTS area_m2 DOUBLE PRECISION",
         "ALTER TABLE rooms ADD COLUMN IF NOT EXISTS ceiling_height_m DOUBLE PRECISION",
         "ALTER TABLE rooms ADD COLUMN IF NOT EXISTS volume_m3 DOUBLE PRECISION",
+        # rooms: MQ-135 occupancy threshold baked into the node firmware (existing rooms get 140)
+        "ALTER TABLE rooms ADD COLUMN IF NOT EXISTS occupancy_threshold INTEGER NOT NULL DEFAULT 140",
         # One-time backfill: rooms registered with surface × height keep their volume.
         """
         UPDATE rooms SET volume_m3 = round((area_m2 * ceiling_height_m)::numeric, 2)

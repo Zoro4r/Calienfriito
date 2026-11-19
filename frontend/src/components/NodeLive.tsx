@@ -16,7 +16,7 @@ export const FW = {
   humHigh: 60, humLow: 40,
   coAlarm: 50,
   occupiedAdc: 2200,      // Wokwi simulation
-  nodeOccupiedAdc: 300,   // physical node firmware default (hardware/bringup/nodo), before it reports its own
+  nodeOccupiedAdc: 140,   // physical node default (DEFAULT_OCCUPANCY_THRESHOLD in the backend), before it reports its own
   minOnS: 60,
 }
 
